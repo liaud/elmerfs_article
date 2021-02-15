@@ -265,17 +265,76 @@ It easy to see that without care and just applying CRDTs merging semantics
 can easily breaks those constraints. There are active research (ref?)
 to provide a Tree CRDT with add, remove and move operations.
 In ElmerFS we didn't implement one of such CRDT that would have ease respecting
-some of those constraint. We explored the path of only using RWMap.
-Even though we still have found any simple solutions to prevent cycle apart from
-keeping track of all rename operations and cancelling the cycle afterward in a deterministic way,
-we still manage to handle most of the concurrent tree operation gracefully without
-locks.
+some of those constraints. We explored the path of only using RWMaps.
+Even though we still have found any simple solution to prevent cycle apart from
+keeping track of all rename operations and cancelling the
+one in conflict in a deterministic way,
+we still manage to handle most of the concurrent tree operations gracefully without distributed locks.
 
 \section{Embracing the CRDT merging semantics}
 
-\subsection{Some problematic cases (rename/link)}
-\subsection{The reasoning behind the View ID}
-\subsection{How it can be applied to preserve information}
+To handle most conflicting operations only with common
+CRDTs ElmerFS introduce the concept of an owner of each operation.
+
+\subsection{Some problematic cases}
+
+First, let's consider some problematic cases of the rename operation. On an POSIX file system, a rename operation is expected to be exclusive with respect to the
+the renamed inode.
+
+In a concurrent scenario, the first problematic situation
+arise when two users tries to rename distinct inodes to the same target location with the same name. In that case,
+CRDT maps merging semantics to associate names to ino do not correspond to what we would want as one of the inode reference will be lost.
+
+One should note that name conflict can also happens with all operations that can create links: link, mkdir, mknod\dots
+
+The second situation happens when a unique reference is renamed
+by two users at the same time to two different location. The standard behavior
+is that one of the operation will fail. This pose two new problems: In a completely
+asynchronous situation, how do converge to a state that is meaningful to the
+users and how do we preserve the reference count with an operation that
+semantically doesn't affect it ?
+
+\subsection{Keeping conflicts where they make sense}
+
+In ElmerFS we solve those problems by using an unique value that we call the
+ViewID. This unique ID is used to identify the origin of the operations and to
+use the merge semantic of map and set CRDTs to our advantage. Apart from
+being unique, there is no particular requirement for this ID. In ElmerFS we used
+the file system user id (uid) assuming that a user might not be
+issuing operations from two different processes.
+Another solution would have been to tie an unique id to each process
+but we find that the mapping between the user and its actions is more
+straightforward in the former solution.
+
+In our application we use a RWSet CRDT to represent directories.
+We depart from standard file system by not only storing a pair of ino
+and name to represent a link but also by storing the ViewID alongside this
+original pair. In a basic scenario where previously we could end up with two
+entries with the same name and with potentially different ino numbers. Here, we
+ensure that we either don't have a conflicts (no tuple in the set
+share a same name entry) or that we keep all succeeded operations in our application state.
+
+By adding uniqueness to our directories entries we allow precise conflicts to bubble up to the application logic when they make sense.
+When two user tries to create a new file inside a same directory, we don't
+really want one operation to fail afterward. As soon as the user created the
+file and started writing it, it is crucial for the file system to keep this
+file. Conflicts here allow us to choose how to present and how to manage
+conflict without designing a specific CRDTs.
+
+\subsection{Linking and reference counting}
+
+By using the same mechanism we can also keep track of the number of reference
+of each inode where a counter CRDT would obviously fall short. Imagine two users
+renaming the same file to a different location. In ElmerFS, we accept this kind
+of operation but it means that this operation is similar to creating an additional link. We use a set CRDT to store all links of an inode. Inside a transaction,
+we issue a remove operation of the previous link and an add operation of the new link. The remove operation will contains the exact tuple matched
+(with the ViewID that created the link), When the CRDT converges, it receives to identical remove operations, and two distinct operation add operations leading to the right reference count.
+
+Directories have the additional requirements that they can only have one existing link
+in the file system. To preserve this invariant, we also use a register with last writer win semantics to decide which reference is valid. Note that
+we could also allow multiple link of a directories, this is only a limitation of the POSIX interface.
+
+\subsection{Interfacing with the user}
 
 \section{Experimentation and future explorations}
 
