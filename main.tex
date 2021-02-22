@@ -354,6 +354,50 @@ this is only a limitation of the POSIX interface.
 
 \subsection{Interfacing with the user}
 
+Interfacing with the user in case of non standard FS behaviors requires care.
+While we solved some issues with the renames and links operation, we still
+need to show to the user that the conflict exists and that it needs to be
+resolved. Since in a FS the user is expected to reference entities by name,
+we kept this idiom to resolve conflict.
+
+In ElmerFS, a name is either a shorthand or a fully qualified (FQN).
+What we call a FQN is a standard POSIX name (the prefix) and
+the ViewID delimited by a special character.
+For example, in ElmerFS we use the uid for convenience and
+we allow user to specify the username instead of the id directly:
+the FQN of \textit{file1} for the user
+\textit{bob} is \textit{file1:bob}. When only the filename is specified, we
+implicatively augment it with the uid of the operation.
+
+When we want to lookup an directory entry with a prefix we have three
+cases to consider:
+
+\begin{enumerate}
+    \item \textbf{There is only one entry for the given prefix}: No conflicts
+    concerns this entry, we can simply return it whatever the ViewIDs are.
+    \item \textbf{There is a prefix conflict and one entry share the same ViewId}:
+    In that case, we assume that the user refers to its own file and resolve it
+    as if there was no conflict.
+    \item \textbf{There is a prefix conflict and no entry has a matching ViewID}:
+    We cannot now for sure what the user referred to, a FQN is required.
+\end{enumerate}
+
+This resolution also happen when listing a directory. By default,
+when there is no conflict, the user will only see prefix names.
+
+In case of conflict, a prefix is showed for in conflict entries that share
+the same ViewId of the user otherwise it is
+the FQN. A benefit of this approach is that the user always know when to use
+a shorthand or a fully qualified name.
+
+To resolve a conflicts, the user only need to use the standard
+FS operations with an FQN or a prefix name. In ElmerFS we didn't need any other
+special mechanism.
+To give an example,
+if a user wants to delete a link named \textit{file1:bob} that is in conflict
+with is own entry \textit{file1} a call to \textit{rm file1:bob}
+is enough and intuitive.
+
 \section{Experimentation and future explorations}
 
 \subsection{Convergence and overhead.}
