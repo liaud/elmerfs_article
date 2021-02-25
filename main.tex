@@ -19,100 +19,80 @@
 
 \section{Introduction}
 
-\begin{enumerate}
-    \item\textbf{TODO: Talk about POSIX earlier}
-    \item\textbf{TODO: Insist on the GEO distributed part}
-\end{enumerate}
 
-File systems exist to abstract and give structure to the general problem of
-storing information on a storage medium. Storage lifetime requirements can range
-from storing for a few microseconds to an endless amount of time.
+File system is one of the most approachable user interface to organize
+and access data that we have tody. This paper address the problem
+of highly available shared and geo-replicated distributed hierarchical
+file systems (FS).
 
-They also have a very wide range of applications. With our personal computers,
-file systems only have to manage a couple of storage media and handle
-concurrency locally between applications run by one single user. On a broader scale, file hosting services not only need to cope
-with the usual problems that can be encountered with persistent media but also
-deal with concurrency between multiple users acting on the same files and
-directories across multiple data centers, with high
-latencies between them due to their geographic distance.
+This is an old problem, the Andrew File System, a pioneer in distributed file
+systems, dates back from 1982 and still receive updates today (refs).
+It is based on a client-server architecture enabling file shared and
+replicated read-only content distribution.
+Firsts versions were able to scale up to hundreds of concurrent users (ref).
 
-Being a critical component, high availability for those services is also
-a strict requirement. Even small failures can lead to hours being wasted waiting
-for the service to go back to normal and sometimes without the possibility to
-access a partially functioning interface, without the possibility to work
-locally in the meantime.
+Bell Labs released a distributed operating system (OS) in 1992 (ref).
+Based on the 9P protocol, this OS represents almost every resources and
+service interfaces as files. Remote access and control is done with
+the standard FS operations: mount, reads and writes.
 
-On the opposite of file systems, there are object stores that persist,
-often immutable, arbitrary blob of data. Those blobs are uniquely identified
-under a common namespace and act as the sole unit of abstraction.
-They have their own advantages, notably because they don't suffer from the burden
-of a strict hierarchy and have a much limited set of available operation:
-the simplest object store can only provide the put, get and delete operation operations whereas,
-a file system, need  to provide all the operations to manipulate the tree hierarchy.
-As a consequence, they are simpler in their structure and are easier to scale,
-now making them a strong component in Cloud services.
+Recently, cloud based file systems have appeared, focusing on ease of use.
+Google Drive is a file hosting service that allows user to store, share and
+synchronize files on multiple devices. It supports concurrent access across
+the world and integrate with other services such as Google Doc or Google Slide
+for collaborative work. Dropbox (ref) offer the same kind of services.
 
-However, hierarchical file systems are still one of the most approachable
-user interface to organize and access data that exists today.
-The challenges that they bring to be distributed, resilient, scalable
-and efficient still exist.
+WeTransfer (ref), a file sharing service, can rely on a simpler abstractions,
+object stores. They allow to persist often immutable blob data identified by a numeric key.
+They don't provide a strict hierarchy and support a limited set of
+operations: put, get and delete. They are easier to scale and have become
+prevalent in cloud services.
+
+However, many existing systems are either unavailable or incorrect, or both,
+under some critical operations, and do not scale well to an enterprise
+workload.
 
 Distributed systems are notoriously hard to build and harder to
-build right. Here, we explore the path of building a plausible distributed file
+build right. Here, we explore the path of building a distributed file
 system that is geos-distributed, highly resilient and scalable by using
-\textbf{Conflict Free Replicated Data Types} (CRDTs) as our main framework:
-data structures that don't need any coordination to be replicated. To ease our
-development, we leverage \textbf{AntidoteDB}, a distributed database based
-on CRDTs and we use the rust programming language,
-a compiled language free of any runtime which enforces memory safety and
-thread safety with its type system.
+\textbf{Conflict Free Replicated Data Types} (CRDTs), i.e. replicated
+data structures that don't need any coordination. We leverage
+\textbf{AntidoteDB}, a distributed database based
+on CRDTs. Our implementation uses the rust programming language,
+an efficient language which enforces memory and
+thread safety statically.
 
-Our findings are that is is possible to build a file system spanning multiple
-data-centers using CRDTs that can work under extreme failure and network conditions while
-resolving complex concurrent user interactions with an intuitive user interface.
+Our experience shows that is is possible to build a file system, spanning multiple
+data-centers, using CRDTs, that remains correct under extreme
+failure and network conditions, while supports a heavy concurrent user
+workloads with an intuitive user interface.
 
 \section{Designing a file system}
 
 \subsection{What a basic file system requires}
 
-There are many ways to implement a file system depending on its usage. We
-decided to design a distributed file system that follows  the POSIX standard.
-More precisely, we implement a user-space file system using the FUSE protocol,
-which avoids the need of creating a kernel module and all the intricacies
-that comes along with it.
+Our requirement is to follow the POSIX standard.  We implement
+a user-space file system using the FUSE protocol (ref).
 
-A basic distributed file system must provide both metadata operations and
-content operations. Metadata operations are here to manipulate the file system
-structure, permissions and retrieving some information. The content operations
-are there to allow the user to persist an arbitrary amount of data to a given
-file and then be able to read it.
-It is also common to expect from distributed file system some amount
-of resiliency and concurrency handling; at least for manipulating the
-file system structure. For content operations,
-a user should be able to write files that range from
-a few bytes to multiple gigabytes.
+A file system supports structural operations operations (to manipulate the file system
+structure, permissions and retrieving some information) and content operations
+(read/write arbitrary amount of data to a given file).
 
-Drawing from the POSIX standard, we will use in this document standard known terms that
-we recall here:
+We use the following terms:
 
 \begin{itemize}
-    \item \textbf{An inode}: It is the internal representation of a filesystem object:
-    files, directories or symlinks, they all share a same common information
-    set stored as an inode.
-    \item \textbf{A link}: A reference to some inode. An inode that doesn't have
-    any link, doesn't need to be kept, it can be deleted. Usually, all references
-    are visible by the user.
-    \item \textbf{An inode number}: Usually called ino, it is
-    a 64bit unique id used to reference an inode.
-    \item \textbf{A directory entry}: The named and visible representation of
-    a link. In most cases, users reference inodes by using their names which
-    is then resolved into an ino.
-    \item \textbf{A block}: This is the smallest unit of storage available.
-    Files always have a effective size that is aligned to the size of a block.
+    \item \textbf{A inode}: Is the internal representation of a filesystem
+    structure object (a file or a directory or a symbolic link).
+    \item \textbf{A link}: A reference to some inode. An inode that is not
+    linked may be delete
+    \item \textbf{An ino}: A unique id used to reference an inode.
+    \item \textbf{A directory entry}: The named and visible representation
+    of a link. When a name is used to reference an inode,
+    the system resolve internally the name into an ino.
 \end{itemize}
 
-One of a key component of a POSIX file system is its tree hierarchy.
-This tree has many complex properties, the ones that are the most common are:
+The key structure of a file system is its tree hierarchy, the most common
+properties that we require are:
 
 \begin{enumerate}
     \item Nodes in this tree are links to inodes. A directory is a container
@@ -122,281 +102,352 @@ This tree has many complex properties, the ones that are the most common are:
     \item Cycles are possible only through symbolic links.
 \end{enumerate}
 
-\subsection{Assumptions and precise goals}
+The file system must also be resilient and concurrent and
+have a behavior close to what an user might see in a local filesystem
+supporting multiple users.
 
-The goals of our implementation is to provide a plausible file system service
-that is geos-distributed and always available. This means that we aim to implement
-all basic operations that one might expect from a basic file system. Being
-geo-distributed, we want our file system to be always available and provide good
-latencies whatever the network conditions are. The file system must be able to work
-in an active-active situation: two clusters are able to issues read, writes and metadata
-operations at the same time without waiting for each other.
+We whish to support enterprise workloads with concurrent user interactions. Our
+expectation are that the application should be able to run up to 5
+geo-distanced clusters with a minimum of 5 nodes per cluster.
 
-We aimed for a system that works first and that helps us to see what it takes
-to use CRDTs for real systems instead of focusing on throughput and raw performances.
-Of course, waiting for an unbearable amount of time is still considered as a failure.
-In summary, most of the design focus was done on the metadata operations
-and their semantics rather than their optimizations.
+Each node should be able to provide enough read write performance
+for writing and reading documents and images with up to 100 concurrent users.
 
-One can expect the following properties from our file system:
+No focus have been done on I/O performances, but to adhere to this
+workload we require to stay in the range of 1mBytes/s for writes
+and more than 10mBytes/s for reads. We don't expect any limit on the file size
+apart from the underlying storage capacity.
+
+\subsection{Assumptions and objectives}
+
+Our main objective is to implements a file system based on CRDTs. CRDT
+ensure Strong Eventual Consistency (SEC) (ref) but do
+not ensure that the application invariants remains correct. The challenge
+is to keep those invariant always correct under any sequence of
+operation.
+
+We want to leverage CRDTs to develop a file system that is always available
+and that provides good response times whatever the network conditions.
+It must support active-active configurations (i.e. two geographically distant
+clusters can issue read, write and structural operation at the same time without
+coordination with each other).
+
+Given the requirements, we want to keep the behavior of the file system as
+close as possible to a local file system.
+
+In summary, we want the following properties:
 
 \begin{itemize}
-    \item \textbf{No locking}: One way to handle concurrency is to use distributed locking
-    to serialize operation applied on the relevant objects. CRDTs provide a way for us to escape
-    this and to allow true concurrency without the need for any consensus protocol.
-    We aim to make the locking optional and only applying it at the will of the user.
-    All metadata and updates operations do not take any distributed
-    locks by default.
-    \item \textbf{Atomic operation}: We want to keep the behavior of POSIX file systems
-    in which every operation is atomic.
-    \item \textbf{Active-Active}: As stated above, we want updates to be able to
-    come from any source at anytime, no matter how old the updates are.
+    \item \textbf{Truly concurrent operations}: One way to
+    handle concurrency is to serialize operation applied on the relevant objects.
+    CRDTs avoids this and allow true concurrency without the need for a consensus.
+    \item \textbf{Atomic operation}: POSIX impose that every FS operation
+    is atomic.
+    \item \textbf{Always available}: CRDT types allows to design system that
+    are always available even under network extreme conditions.
+    \item \textbf{Active-Active}: Several replica accept
+    operations (structural and updates) concurrently and propagate them
+    from one another, even after long delays.
     \item \textbf{Least surprise}: We don't want to perform too many actions
-      or changes besides what the ones the users does. Meaning we want to
-      avoid rollbacks or drastic structural changes behind the scene.
+    or changes besides what the ones the users does. We want to
+    avoid rollbacks or drastic structural changes behind the scene to stay close
+    to a local file system behavior.
 \end{itemize}
 
-\subsection{A high level interface for CRDTs}
+\section{Concurrency in a File System}
 
-Like an application that can rely on an external database service to persist its
-data preserving ACID constraints, here we use AntidoteDB to provide us with
-tooling and infrastructure to handle CRDTs and their replication.
-AntidoteDB by default uses the Cure protocol, allowing us to perform interactive
-transactions that concern multiple objects with consistent read and writes.
+From a high level point of view, AntidoteDB is a key-value store, where each
+value is a CRDT. AntidoteDB provides us a library needed CRDT types. This means
+that the designer must map structures to the appropriate CRDT types and ensure
+that he can express the application's operations with the set of operation
+offered by the chosen CRDT types.
 
-Each operation in ElmerFS is wrapped inside an AntidoteDB
-transaction. Any failure will abort the transaction preventing partial updates.
-No other specific work has been done is this regard since all is handled
-by the protocol just like when using transactions in common databases.
+First, let's consider FS operations and their characteristics under an
+environnement without coordination.
 
-Using this infrastructure and abstraction, ElmerFS is only a thin layer between
-the application interface (here POSIX) and the AntidoteDB database. We only
-have to be concerned by the application main logic: chose the right
-CRDTs for our structural representation and issue the correct
-sequence of operation inside a transaction.
+\subsection{Inode creation}
 
-\subsection{Predictability in latencies}
+All operations that creates inodes
+(\textit{mkdir} for directories and \textit{mknod} for files and symbolic links)
+needs to generate an unique id.
 
-As ElmerFS is a thin layer which rely on multiple roundtrip with AntidoteDB,
-we always deploy ElmerFS and AntidoteDB side by side on the same machine.
-AntidoteDB receives our requests, applies the CRDT transformations
-locally and gives us a response as soon as it is complete.
+This requires to ensure that no replicas can ever generate the same id even
+if they can't talk to each other. This problems is often solved with the use
+of UUIDs, a 16 bytes number, which have a large enough domain such
+that the probability to generate a duplicate is practically null.
+However, in POSIX, the requirement for this id is to be a 8 bytes number.
 
-This allows to reduce the latency between the user's operation and our response.
-The local AntidoteDB is expected to join permanent clusters with multiple
-running AntidoteDB instances. The latency between the local AntidoteDB and
-the cluster might be high, but the perceived latency for the user stays
-relatively low. Since we do not require mandatory locking, we never have to
-wait for a majority of the quorum, everything is as local as possible.
+\subsection{Named links}
 
-\section{Building blocks for building a file system}
+Operations that create or move links (\textit{rename}, \textit{link}
+and creation operations) need to consider the case where two users
+concurrently want to create a link with an identical name
+inside a same directory.
+
+In local file systems or distributed with coordination,
+this problem does not exists as those operation are serialized. Serializing
+those operation by the use of distributed locking is an option, but that would
+lessen the advantages of CRDTs as almost all structural operations would need
+coordination.
+
+Additional problems arise if we decide to accept temporary conflicts. In such
+cases, we have to inform the user of a conflict in the POSIX interface
+which wasn't designed for this kind of situations. Care needs also to be taken
+to not impact the current workload of one user from external structural
+updates.
+
+\subsection{Preserving the FS tree invariants}
+
+By its nature \textit{rename} is an exclusive operation.
+As soon as a link is moved, subsequent moves on the same link should fail.
+When we decide to not serialize, this operation can create cycles
+or unexpected additional links.
+
+For example, without coordination, two users trying to rename
+two directory into each other might make each directory be the parent of the other.
+Once this situation arise, the concerned directories aren't reachable
+from the root directory anymore.
+
+The user can't solve the problem by himself and the application must
+decide what must be done. Many distributed file system fails
+to handle this situation, leaving the user with an unrecoverable error.
+
+When \textit{rename} is used concurrently on the same source link to a different
+destination, if both operations are accepted, it will create one additional
+link of the inode. Additionally, for directories, the POSIX interface requires
+that directories can only have one unique parent at all time.
+
+\subsection{Deletion of inodes}
+
+The \textit{unlink} operation, which removes links, poses problems
+in the presence of concurrent operations that can create links.
+
+Consider the simple case where one user \textit{unlink} a file while another
+one \textit{link}s it. The inode's state stays correct when the
+application will process the link operation from another replicas.
+
+Recycling the inode (its unique id for example) also becomes a problems.
+We cannot know when all replicas that once saw this inode
+will converge to a state where this inode is not reachable anymore.
+
+Similar issues concerning permissions can be observed. Usually coordination is
+needed to ensure that permission change are honored by every replicas at
+the time at which they are applied.
+
+\section{Building blocks}
+
+\subsection{Atomic Operations}
+
+Each operation in ElmerFS is implemented as an AntidoteDB transaction.
+They are interactive and are across multiple objects with causally consistent
+reads an writes. Atomicity of our FS operations comes "for free" by using
+this functionality and we designed ElmerFS as a layer between the POSIX
+interface and the AntidoteDB.
 
 \subsection{Composing CRDTs}
 
-AntidoteDB provides us with a few basic CRDTs that we can use and compose together
-to represent the state of the application. From a high level point of view,
-AntidoteDB is a key-value store where each value is a CRDT.
-When dealing with a database, we have to map
-the in-memory application state to CRDTs.
-In a statically typed programming language such as Rust, it means
-that we must map our structures and enumerations to some CRDTs.
+We split ElmerFS state into four mains entities: inodes,
+blocks, directories entries.
 
-For structures, we were naturally leaned towards the type map CRDTs.
-In AntidoteDB, there are multiple kind of maps to chose from each with specific
-convergence properties. It is up to the application to chose what would be the best fit
-for its business logic.
+\textbf{Inodes} stores all POSIX metadata information.
+We represents this entity using a Remove Win Map (RWMap). \linebreak RWMaps favor remove operations in face
+of concurrent adds.
 
-Grow Only Maps (GOMaps) are maps where the removal of elements is not possible.
-At first, we thought that this would be a good fit to represent
-our structures. Rust is statically typed, we cannot really remove one specific
-field: either all fields are initialized or none of them. However, AntidoteDB
-doesn't have the notion of existence and we cannot ask it to simply delete
-a GOMap when the entity has been deleted (\textbf{TODO: Maybe explain why }).
-Remove Win Maps (RWMap) are used instead, with the nice property that
-we can only issue updates of specific fields and not worrying of
-having structure partially existing as that would be the case
-with Add Win Maps (AWMaps).
+This convergence property is crucial. Most operations only update a subset of
+the inode attributes. In case of a concurrent \textit{unlink},
+if no link remains, we explicitly remove all fields. Concurrent partial updates
+coming from the other FS operations will be dropped.
 
-Most of the fields can be encoded as simple registers. The CURE (\textbf{TODO: ref!})
-protocol, which is used by AntidoteDB, allows us to
-perform read-write transactions spanning multiple CRDTs and ensure
-that all registers stay consistent in respect to each other.
+\textbf{Blocks} are fixed size Last Writer Win register which can store
+arbitrary content. They serve as storing file content and
+symlink target paths. the application addresses the blocks implicatively when it receives
+a write or read requests.
 
-We will see in what follows that by only composing CRDTs we can represent
-most of the file system state with complex convergence properties. In a way,
-composing CRDTs is the tool for the application to create one final CRDT, which
-is the application state. \textbf{Having the right abstracted and formalized CRDTs is
-key to allow an application to model its state without having to
-formalize one specialized CRDT for each domain and without having to bend
-its domain logic in a diminishing way}.
+The advantage of this representation is that we do not
+need to store an index of all existing blocks of a file.
+The drawbacks are is that if we delete an inode,
+we cannot explicitly delete an infinite amount of blocks, potentially leaving
+blocks that are never freed.
 
-\subsection{A common base}
+\textbf{Directory Entries} are represented as Remove Win set (RWSet). Simplest directory
+entries are pairs of an ino and a name.
+For the same reasons as stated above, the remove win convergence property
+is necessary. A set is better suited for directory entries than a map.
+When we handles name conflicts we don't want to ever have two entries with
+the same name and ino.
 
-We won't describe in details how ElmerFS identify its entities,
-it simply computes a composite key from a kind
-(inode, block, directory, ...) and an ino.
 
-The ino generation is also very simple. Each instance reserves a predetermined
-amount of ino beforehand and keeps them in memory. To ensure that multiple
-instances do not produce the same ino, we have to use a lock. A counter CRDT
-doesn't work for this (we have to read the value, not just incrementing it). In fact
-this is the only place where a mandatory lock is used.
-A sequence CRDT (\textbf{TODO: which one}) might be a solution but aren't available in
-AntidoteDB.
+% \subsection{A common base}
 
-A consequence of this approach is that inos are never recycled. We can never
-be certain when a CRDT will never be used again as we allow divergence for an
-not constrained amount of time. However, for this particular case, 64bit is a
-large enough domain for this problem to be problematic for most common use
-cases.
+% We won't describe in details how ElmerFS identify its entities,
+% it simply computes a composite key from a kind
+% (inode, block, directory, ...) and an ino.
 
-Our inode contains all metadata information that are common in POSIX:
-permissions, owner, change, modification and access
-time. As described above, we represent them using a RWMap.
-We made the decision not to store data information of the file and the
-symbolic link path alongside the metadata.
+% The ino generation is also very simple. Each instance reserves a predetermined
+% amount of ino beforehand and keeps them in memory. To ensure that multiple
+% instances do not produce the same ino, we have to use a lock. A counter CRDT
+% does not work for this (we have to read the value, not just incrementing it). In fact
+% this is the only place where a mandatory lock is used.
+% A sequence CRDT (\textbf{TODO: which one}) might be a solution but aren't available in
+% AntidoteDB.
 
-As only inodes represent the existence of entities, this separation leads to
-potential leaks if some inode is deleted in one site and written to in another.
-However, it is more a limitation of the API of AntidoteDB than CRDTs which
-doesn't support partial read or update.
+% A consequence of this approach is that inos are never recycled. We can never
+% be certain when a CRDT will never be used again as we allow divergence for an
+% not constrained amount of time. However, for this particular case, 64bit is a
+% large enough domain for this problem to be problematic for most common use
+% cases.
 
-\subsection{The heart of a file system interface}
+% Our inode contains all metadata information that are common in POSIX:
+% permissions, owner, change, modification and access
+% time. As described above, we represent them using a RWMap.
+% We made the decision not to store data information of the file and the
+% symbolic link path alongside the metadata.
 
-To represent the tree hierarchy, it is easy to see that just applying CRDTs merging semantics
-without care can easily break the tree constraints.
-There is active research (ref?) to provide a Tree CRDT with add, remove and move operations.
-In ElmerFS we didn't implement one of such CRDT that would have ease our
-development. We explored the path of only using RWMaps.
+% As only inodes represent the existence of entities, this separation leads to
+% potential leaks if some inode is deleted in one site and written to in another.
+% However, it is more a limitation of the API of AntidoteDB than CRDTs which
+% does not support partial read or update.
 
-Even though we still have found any simple solution to prevent cycle apart from
-keeping track of all rename operations and cancelling the
-one in conflict in a deterministic way, we still manage to handle
-most of the concurrent tree operations gracefully without distributed locks.
-This solution isn't perfect, our choice to prevent cycles would be costly at
-the application level.
+% \subsection{The heart of a file system interface}
 
-\section{Embracing the CRDT merging semantics}
+% To represent the tree hierarchy, it is easy to see that just applying CRDTs merging semantics
+% without care can easily break the tree constraints.
+% There is active research (ref?) to provide a Tree CRDT with add, remove and move operations.
+% In ElmerFS we didn't implement one of such CRDT that would have ease our
+% development. We explored the path of only using RWMaps.
 
-To handle most conflicting operations with only common
-CRDTs, ElmerFS introduces the concept of an owner of each operation and
-each owner has its own view of the current file system.
+% Even though we still have found any simple solution to prevent cycle apart from
+% keeping track of all rename operations and cancelling the
+% one in conflict in a deterministic way, we still manage to handle
+% most of the concurrent tree operations gracefully without distributed locks.
+% This solution isn't perfect, our choice to prevent cycles would be costly at
+% the application level.
 
-\subsection{Some problematic cases}
+% \section{Embracing the CRDT merging semantics}
 
-First, let's consider some problematic cases of the rename operation.
-On a POSIX file system, a rename operation is expected to be exclusive
-with respect to the renamed inodes.
+% To handle most conflicting operations with only common
+% CRDTs, ElmerFS introduces the concept of an owner of each operation and
+% each owner has its own view of the current file system.
 
-% confusing
-In a concurrent scenario, the first problematic situation
-arises when two users try to rename distinct inodes to the same target location with the same name.
-In that case, CRDT maps merging semantics will only keep one operation depending
-in which order they arrived. In all cases one link will be lost and the inode
-might become unreachable if the was the only link to that was referencing it.
+% \subsection{Some problematic cases}
 
-Moreover, those name conflicts can also happen with all operations that
-can create links: link, mkdir, mknod\dots
+% First, let's consider some problematic cases of the rename operation.
+% On a POSIX file system, a rename operation is expected to be exclusive
+% with respect to the renamed inodes.
 
-The second situation happens when a unique reference is renamed
-by two users at the same time to two different locations. The standard behavior
-is that one of the operation will fail. This poses two new problems: In a completely
-asynchronous situation, how do we converge to a state that is meaningful to the
-users and how do we preserve the reference count with an operation that
-semantically doesn't affect it ?
+% % confusing
+% In a concurrent scenario, the first problematic situation
+% arises when two users try to rename distinct inodes to the same target location with the same name.
+% In that case, CRDT maps merging semantics will only keep one operation depending
+% in which order they arrived. In all cases one link will be lost and the inode
+% might become unreachable if the was the only link to that was referencing it.
 
-\subsection{Keeping conflicts where they make sense}
+% Moreover, those name conflicts can also happen with all operations that
+% can create links: link, mkdir, mknod\dots
 
-In ElmerFS, we solve these problems by using an unique value that we call the
-ViewID. This unique ID is used to identify the origin of the operations and to
-use the merge semantic of map and set CRDTs to our advantage. Apart from
-being unique, there is no particular requirement for this ID. In ElmerFS we used
-the file system user id (uid) assuming that a user might not be
-issuing operations from two different processes.
-Another solution would have been to tie a unique id to each process
-but we find that the mapping between the user and its actions is more
-straightforward in the former solution.
+% The second situation happens when a unique reference is renamed
+% by two users at the same time to two different locations. The standard behavior
+% is that one of the operation will fail. This poses two new problems: In a completely
+% asynchronous situation, how do we ensure that the state converge something that
+% is meaningful to the user and how the reference count can be handled
+% with an operation that semantically does not affect it ?
 
-In our application we use a RWSet CRDT to represent directories.
-We depart from standard file system by not only storing a pair of ino
-and name to represent a link but also by storing the ViewID alongside this
-original pair.
+% \subsection{Keeping conflicts where they make sense}
 
-If we take the previous concurrent case where two users tries to rename two
-inode to the same location, with the ViewID associated with each name, we
-ensure that we either don't have a conflict (no tuple in the set
-share a same name entry) or that we keep all succeeded operations
-in our application state: there might be two identical name in the set, but they
-will have a different ViewID.
+% In ElmerFS, we solve these problems by using an unique value that we call the
+% ViewID. This unique ID is used to identify the origin of the operations and to
+% use the merge semantic of map and set CRDTs to our advantage. Apart from
+% being unique, there is no particular requirement for this ID. In ElmerFS we used
+% the file system user id (uid) assuming that a user might not be
+% issuing operations from two different processes.
+% Another solution would have been to tie a unique id to each process
+% but we find that the mapping between the user and its actions is more
+% straightforward in the former solution.
 
-By adding uniqueness to our directory entries, we allow precise conflicts to bubble up to the application logic when they make sense.
-When two user try to create a new file inside a same directory, we don't
-really want one operation to fail afterward. As soon as the user created the
-file and started writing it, it is crucial for the file system to keep this
-file. Conflicts here allow us to choose how to present and how to manage
-conflict without designing a specific CRDTs.
+% In our application we use a RWSet CRDT to represent directories.
+% We depart from standard file system by not only storing a pair of ino
+% and name to represent a link but also by storing the ViewID alongside this
+% original pair.
 
-\subsection{Linking and reference counting}
+% If we take the previous concurrent case where two users tries to rename two
+% inode to the same location, with the ViewID associated with each name, we
+% ensure that we either don't have a conflict (no tuple in the set
+% share a same name entry) or that we keep all succeeded operations
+% in our application state: there might be two identical name in the set, but they
+% will have a different ViewID.
 
-By using the same mechanism we can also keep track of the number of reference
-of each inode where a counter CRDT would obviously fall short. One can imagine two users
-renaming the same file to a different location. In ElmerFS, we accept this kind
-of operation but it means that this operation is similar to creating an additional link. We use a set CRDT to store all links of an inode. Inside a transaction,
-we issue a remove operation of the previous link and an add operation of the new link. The remove operation will contains the exact tuple matched
-(with the ViewID that created the link), When the CRDT converges, it receives
-two identical remove operations, and two distinct add operations, leading to the right reference count.
+% By adding uniqueness to our directory entries, we allow precise conflicts
+% to bubble up to the application logic when they make sense.
+% When two user try to create a new file inside a same directory, we don't
+% really want one operation to fail afterward. As soon as the user created the
+% file and started writing it, it is crucial for the file system to keep this
+% file. Conflicts here allow us to choose how to present and how to manage
+% conflict without designing a specific CRDTs.
 
-Directories have the additional requirements that they can only have one unique
-parent in the file system. To preserve this invariant, we also use a register
-with last writer win semantics, to decide which reference is valid. Note that
-we could also allow multiple link of a directories,
-this is only a limitation of the POSIX interface.
+% \subsection{Linking and reference counting}
 
-\subsection{Interfacing with the user}
+% By using the same mechanism we can also keep track of the number of reference
+% of each inode where a counter CRDT would obviously fall short. One can imagine two users
+% renaming the same file to a different location. In ElmerFS, we accept this kind
+% of operation but it means that this operation is similar to creating
+% an additional link.
+% We use a set CRDT to store all links of an inode.
+% Inside a transaction,
+% we issue a remove operation of the previous link and an add operation of the new link. The remove operation will contains the exact tuple matched
+% (with the ViewID that created the link), When the CRDT converges, it receives
+% two identical remove operations, and two distinct add operations, leading to the right reference count.
 
-Interfacing with the user in case of non standard FS behaviors requires care.
-While we solved some issues with the renames and links operation, we still
-need to show to the user that the conflict exists and that it needs to be
-resolved. Since in a FS the user is expected to reference entities by name,
-we kept this idiom to resolve conflict.
+% Directories have the additional requirements that they can only have one unique
+% parent in the file system. To preserve this invariant, we also use a register
+% with last writer win semantics, to decide which reference is valid. Note that
+% we could also allow multiple link of a directories,
+% this is only a limitation of the POSIX interface.
 
-In ElmerFS, a name is either a shorthand or a fully qualified (FQN).
-What we call a FQN is a standard POSIX name (the prefix) and
-the ViewID delimited by a special character.
-For example, in ElmerFS we use the uid for convenience and
-we allow user to specify the username instead of the id directly:
-the FQN of \textit{file1} for the user
-\textit{bob} is \textit{file1:bob}. When only the filename is specified, we
-implicatively augment it with the uid of the operation.
+% \subsection{Interfacing with the user}
 
-When we want to lookup an directory entry with a prefix we have three
-cases to consider:
+% Interfacing with the user in case of non standard FS behaviors requires care.
+% While we solved some issues with the renames and links operation, we still
+% need to show to the user that the conflict exists and that it needs to be
+% resolved. Since in a FS the user is expected to reference entities by name,
+% we kept this idiom to resolve conflict.
 
-\begin{enumerate}
-    \item \textbf{There is only one entry for the given prefix}: No conflicts
-    concerns this entry, we can simply return it whatever the ViewIDs are.
-    \item \textbf{There is a prefix conflict and one entry share the same ViewId}:
-    In that case, we assume that the user refers to its own file and resolve it
-    as if there was no conflict.
-    \item \textbf{There is a prefix conflict and no entry has a matching ViewID}:
-    We cannot now for sure what the user referred to, a FQN is required.
-\end{enumerate}
+% In ElmerFS, a name is either a shorthand or a fully qualified (FQN).
+% What we call a FQN is a standard POSIX name (the prefix) and
+% the ViewID delimited by a special character.
+% For example, in ElmerFS we use the uid for convenience and
+% we allow user to specify the username instead of the id directly:
+% the FQN of \textit{file1} for the user
+% \textit{bob} is \textit{file1:bob}. When only the filename is specified, we
+% implicatively augment it with the uid of the operation.
 
-This resolution also happen when listing a directory. By default,
-when there is no conflict, the user will only see prefix names.
+% When we want to lookup an directory entry with a prefix we have three
+% cases to consider:
 
-In case of conflict, a prefix is showed for in conflict entries that share
-the same ViewId of the user otherwise it is
-the FQN. A benefit of this approach is that the user always know when to use
-a shorthand or a fully qualified name.
+% \begin{enumerate}
+%     \item \textbf{There is only one entry for the given prefix}: No conflicts
+%     concerns this entry, we can simply return it whatever the ViewIDs are.
+%     \item \textbf{There is a prefix conflict and one entry share the same ViewId}:
+%     In that case, we assume that the user refers to its own file and resolve it
+%     as if there was no conflict.
+%     \item \textbf{There is a prefix conflict and no entry has a matching ViewID}:
+%     We cannot now for sure what the user referred to, a FQN is required.
+% \end{enumerate}
 
-To resolve a conflicts, the user only need to use the standard
-FS operations with an FQN or a prefix name. In ElmerFS we didn't need any other
-special mechanism.
-To give an example,
-if a user wants to delete a link named \textit{file1:bob} that is in conflict
-with is own entry \textit{file1} a call to \textit{rm file1:bob}
-is enough and intuitive.
+% This resolution also happen when listing a directory. By default,
+% when there is no conflict, the user will only see prefix names.
+
+% In case of conflict, a prefix is showed for in conflict entries that share
+% the same ViewId of the user otherwise it is
+% the FQN. A benefit of this approach is that the user always know when to use
+% a shorthand or a fully qualified name.
+
+% To resolve a conflicts, the user only need to use the standard
+% FS operations with an FQN or a prefix name. In ElmerFS we didn't need any other
+% special mechanism.
+% To give an example,
+% if a user wants to delete a link named \textit{file1:bob} that is in conflict
+% with is own entry \textit{file1} a call to \textit{rm file1:bob}
+% is enough and intuitive.
 
 \section{Experimentation and future explorations}
 
