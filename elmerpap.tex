@@ -67,13 +67,6 @@ The resulting state informs the user about the resolved conflict in an intuitive
 The user can then complement or reverse the conflict resolution outcome using
 traditional file system operations.
 We demonstrate this mechanism through conflict resolution examples.
-% the problem of building highly available shared and
-% geo-replicated distributed POSIX file systems (FS).
-% We explore the path of building a distributed file system that
-% is geo-distributed, highly resilient and scalable by
-% using Conflict-free Replicated Data Types (CRDTs) i.e. replicated data
-% structures that do not need any coordination. We build upon these data
-% structures and explore solutions to ensure that the application remains correct and in a final state that keeps the original user intention in case of conflicting operations.
 
 \end{abstract}
 
@@ -444,8 +437,8 @@ Apart from being unique, there is no particular requirement for this identifier.
 We chose to use the file system user id (uid) and we expect that a
 user won’t issue operations from two different processes.
 
-Each time a user creates a link, we not only store the name and the ino
-of the link but also the ViewID of the user that created it.
+Each time a user creates a link, as illustrated in Figure~\ref{fig:fqn},
+we not only store the name and the ino of the link but also the ViewID of the user that created it.
 Because we use RWSet for directories with an equality put on names,
 entries that would have been previously considered the same
 (sharing the same name and not necessarily the same ino) are now distinct.
@@ -469,7 +462,8 @@ We always favor the ViewID of the user that issued the request.
 
 \begin{figure}[h]
 	\caption{An example of the name resolution in ElmerFS. The set above is
-	         what the folder contains.}
+	what the folder contains.}
+	\label{fig:fqn}
 	\Description{A folder contains two conflicting entries with similar names.
 	             The user is able to query its folder using a partial name or
 				 the one in conflict using the fully qualified name.}
@@ -485,7 +479,7 @@ operations that can create a link. (See section~\ref{fs:weak} for problematic
 renames).
 
 Because of this situation, using a counter to track the number of links is no
-longer sufficient because at the time we issue the \texit{rename} operation
+longer sufficient because at the time we issue the \textit{rename} operation
 we cannot know if the operation will end up being concurrent.
 
 To keep track of the number of links, we use another RWSet that is
