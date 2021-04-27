@@ -1,5 +1,7 @@
 %\documentclass[sigconf]{acmart}
 \documentclass[sigconf,anonymous,10pt]{acmart}
+\usepackage{graphicx}
+\graphicspath{ {./images/} }
 
 % Copyright
 % Pick the correct copyright notice that matches your rights form
@@ -49,13 +51,29 @@
 \renewcommand{\shortauthors}{R. Vaillant et al.}
 
 \begin{abstract}
-This paper addresses the problem of building highly available shared and
-geo-replicated distributed POSIX file systems (FS).
-We explore the path of building a distributed file system that
-is geos-distributed, highly resilient and scalable by
-using Conflict-free Replicated Data Types (CRDTs) i.e. replicated data
-structures that don’t need any coordination. We build upon these data
-structures and explore solutions to ensure that the application remains correct and in a final state that keeps the original user intention in case of conflicting operations.
+Building scalable and highly available geo-replicated file systems is hard.
+These systems need to resolve conflicts that emerge in concurrent operations in a way
+that maintains the file system invariants, is meaningful to the user,
+and does not depart from the traditional file system interface.
+Conflict resolution in existing systems often leads to unexpected or inconsistent
+results.
+This paper presents the design of ElmerFS, a geo-replicated, truly concurrent
+file system built with the aim of addressing these challenges.
+Conflict resolution in ElmerFS is designed with the principle of preserving
+user intention.
+File system replicas converge to a common state through the use of Conflict-free
+replicated data types (CRDTs) for representing file system structures.
+The resulting state informs the user about the resolved conflict in an intuitive way.
+The user can then complement or reverse the conflict resolution outcome using
+traditional file system operations.
+We demonstrate this mechanism through conflict resolution examples.
+% the problem of building highly available shared and
+% geo-replicated distributed POSIX file systems (FS).
+% We explore the path of building a distributed file system that
+% is geo-distributed, highly resilient and scalable by
+% using Conflict-free Replicated Data Types (CRDTs) i.e. replicated data
+% structures that do not need any coordination. We build upon these data
+% structures and explore solutions to ensure that the application remains correct and in a final state that keeps the original user intention in case of conflicting operations.
 
 \end{abstract}
 
@@ -120,32 +138,75 @@ structures and explore solutions to ensure that the application remains correct 
 % distributed data centers for  ensuring fault-tolerance and
 % achieving high performance and scalability.
 
-System designers have long sought to design geo-replicated file systems
-allowing concurrent updates on multiple replicas (active-active replication)
-that are correct, remain available under partitions,
-and provide high performances (Bell Labs P9~\cite{pike1995plan}, AFS~\cite{howard1988scale}).
+File systems services are essential for data sharing and collaboration among users.
+These services must provide low response time, remain available in the persistence
+of network partitions, and provide support for offline work \cite{howard1988scale}.
+To achieve these goals, these services typically rely on systems that replicate
+data among geographically distant sites and serve each user request from the replica
+closer to the user, without coordination with other replicas.
 
-One approach is to rely on strong consistency, ensuring that replicas agree on a single, global order of operations. Ordering operations across replicas, however, requires coordination among geographically distributed nodes, and therefore comes at the cost of performance overheads and reduced availability under network partitions.
+This type of design allows replicas to accept concurrent operations that conflict
+with one another, for example concurrently creating two files with the same name
+under the same directly on two different replicas.
+As a result, these systems face two challenges:
+resolving conflicts between concurrent operations in a way that is meaningful to
+the users while maintaining file system invariants,
+and ensuring support for legacy applications that have not been developed with
+mechanisms for dealing with concurrency anomalies.
 
-An alternative approach is to provide weak consistency guarantees.
-This approach does not require coordination among replicas, and ensures availability under network partitions.
+It has been shown that existing file system services that support collaboration
+and offline work merge some conflicts in inconsistent, non-deterministic or
+unexpected ways \cite{cai2018some, taothanh:tel-01673030}.
+For example, in Google Drive the conflict described above can result in two
+replicas presenting two different views of the file system to users.
 
-However, resolving conflicts while ensuring that file system invariants are maintained and user operations not discarded is hard.
+This makes it difficult for users to have an intuitive understanding about
+the behaviors of these services,
+leading to misconceptions on their expected behavior~\cite{tang2013you}.
+Moreover, enabling more flexible conflict resolution by exporting some decisions
+to the users while maintaining support for legacy applications through POSIX
+compliance is challenging.
 
-Existing systems that accept concurrent updates on multiple replicas without coordination fails both to converge to a predictable state and
-to keep the user's original intention when the operation was issued~\cite{cai2018some}.
-Convergence of those systems can leads to directory being merged,
-files being lost or have their content mixed in unexpected manners.
+In this paper, we present a comprehensive analysis of the challenges in the
+design of geo-replicated weakly consistent file systems.
+Guided by this analysis, we propose ElmerFS,
+a geo-replicated file system that provides intuitive conflict resolution
+semantics, while maintaining support for legacy applications.
+The design of ElmerFS leverages the properties of Conflict-free replicated data
+types (CRDTs) to ensure that concurrent operations on different replicas always
+converge into a consistent state.
+The guiding design principle is that conflict resolution should preserve user
+intention.
+Finally, we demonstrate through conflict resolution examples that a CRDT-based
+file system design can provide conflict resolution semantics that are intuitive
+to the user.
 
-It is difficult for a user to build a simple intuition of these behaviors,
-leading to misconceptions on what their tool offers and how it react in these situations~\cite{tang2013you}
+%  ElmerFS, a POSIX-compliant geo-replicated
+% file system that allows users to resolve conflicts using known FS operations.
 
-In this paper, we present ElmerFS, a POSIX-compliant geo-replicated
-file system, that allow users to resolve conflicts using known FS operations.
+% ElmerFS does not require coordination between replicas, ensures correctness in the face of concurrent conflicting updates and remains available under network partition and server crashes.
 
-ElmerFS does not require coordination between replicas, ensures correctness in the face of concurrent conflicting updates and remains available under network partition and server crashes.
+% The design of ElmerFS is based on Conflict-free Replicated Data Types (CRDTs), replicated data structures that ensure that modifications performed on different replicas can always be merged into a consistent state.
 
-The design of ElmerFS is based on Conflict-free Replicated Data Types (CRDTs), replicated data structures that ensure that modifications performed on different replicas can always be merged into a consistent state.
+% System designers have long sought to design geo-replicated file systems
+% allowing concurrent updates on multiple replicas (active-active replication)
+% that are correct, remain available under partitions,
+% and provide high performance \cite{pike1995plan, howard1988scale}.
+
+% One approach is to rely on strong consistency, ensuring that replicas agree on a single, global order of operations. Ordering operations across replicas, however, requires coordination among geographically distributed nodes, and therefore comes at the cost of performance overheads and reduced availability under network partitions.
+
+% An alternative approach is to provide weak consistency guarantees.
+% This approach does not require coordination among replicas, and ensures availability under network partitions.
+
+% However, resolving conflicts while ensuring that file system invariants are maintained and user operations not discarded is hard.
+
+% Existing systems that accept concurrent updates on multiple replicas without coordination fail both to converge to a predictable state and
+% to keep the user's original intention when the operation was issued~\cite{cai2018some}.
+% Convergence of those systems can leads to directories being merged,
+% files being lost or having their content mixed in unexpected manners.
+
+
+
 
 \section{Designing a file system}
 
@@ -166,7 +227,7 @@ structure (the tree), and content operations,
 which can be used to store and retrieve information from files.
 
 File systems are commonly represented internally as a collection of inodes.
-We don't depart from this representation:
+We do not depart from this representation:
 An inode represents a file system object (file, directory or symbolic link).
 Each inode is identified by a unique numeric identifier (an ino).
 A link is a reference to an inode. A directory entry is a named and visible representation of a link.
@@ -176,75 +237,66 @@ A link is a reference to an inode. A directory entry is a named and visible repr
 
 Preserving file system invariants in a replicated file system
 that allows updates in multiple replicas with coordination
-among them presents several design issues:
+among them presents several challenges:
 
 \begin{itemize}
 	\item \textbf{Unique identifiers}: Any operation that creates
 	inodes needs to generate a unique identifier.
 	Without coordination among replicas, generated ids might conflict.
 	In practice, this is addressed using 16 byte ids.
-	However, 8 byte ids are required in POSIX.
-	\item \textbf{Named links}: Operations that create or move links
-	(rename, link and creation operations) may result in conflicts
-	in which concurrent operations οn different replicas create
-	links with the same name in the same directory.
-	Systems may resolve this type of conflict by automatically
-	renaming those links, or expose the conflict resolution to the user.
-	\item \textbf{Preserving the FS tree invariants}: Concurrent rename (move)
-	operations without coordination may result in cycles or unexpected
-	additional links. Merging an operation that moves a directory A into a
-	directory B with a concurrent operation that moves B into A violates the
-	FS invariants as it results in a cycle.
-	Furthermore, merging two concurrent operations that move the same directory
-	to different destinations results in a directory with two parents,
-	which violates the FS invariants.
-	\item \textbf{Deletion of inodes}: Concurrent link and unlink operations may result in different behavior depending on the order in which operations are applied on each replica. The FS may be left with a partial inode that is not fully deleted but apparent.
-	\item \textbf{Permissions changes}: Updating permission from a replica may not be propagated directly to other replicas. Ensuring Operations that have no longer sufficient privileges should be discarded.
+	However, this is not compatible with the POSIX specification, which requires 8 byte ids.
+	\item \textbf{Named links}: Operations that create or move objects (files or directories)
+	may result in conflicts in which concurrent operations οn different replicas create
+	objects with the same name in the same directory.
+	Existing systems resolve naming conflicts between files by automatically renaming
+  files, and conflicts between directories either by renaming or by merging them.
+	\item \textbf{Preserving the FS tree invariants}: Concurrent move
+	operations without coordination may violate the file system invariant.
+  For example, merging an operation that moves a directory A into a
+	directory B with a concurrent operation that moves B into A can result in a cycle.
+  Merging two concurrent operations that move the same directory
+	to different destinations can result in a directory with two parents.
+  \item \textbf{Deletion of inodes}: Concurrent link and unlink operations may result in different behavior depending on the order in which operations are applied on each replica.
+  % The file system may be left with a partial inode that is not fully deleted but apparent.
+  Moreover, even if a common conflict resolution is applied to all replicas, the
+  result might not be what the user expects from the system.
+	\item \textbf{Permissions changes}: Updating permission from a replica may not
+  be propagated directly to other replicas.
+  Merging an operation that removes a Bob's permission to write to file with a
+  concurrent operation in which Bob writes
+  to that file will result in a different outcome depending on the order in which
+  operations are applied.
+  % (This is very interesting but can create a lot of questions, it's maybe better to avoid mentioning permissions)
 \end{itemize}
 
-\subsection{What are CRDTs and a brief overview of AntidoteDB}
+\subsection{Conflict-Free Replicated Data Types}
 
 Ensuring that all replicas converge to the same state without coordination
 is not trivial.
 
-Conflict-Free Replicated Data types are data structures that
+Conflict-Free Replicated Data Types (CRDTs) are data structures that
 can be replicated across multiple replicas, and these replicas can be updated independently and concurrently without coordination.
 
 By construction, CRDTs guarantee that modifications on different
 replicas can always be merged into a consistent state without requiring
 any special conflict resolution code or user intervention.
 
-There are two approaches to CRDTs: Operation-based CRDTs replicate their state
-by transmitting only the update operation that are commutative.
-State-based CRDTs send their full local state to other replicas and merge
-incoming states with a commutative, associative and idempotent function~\cite{shapiro2011conflict}.
+Moreover, the rules used for conflict resolution are parts of each CRDT's
+definition.
+Therefore, application developers can control their conflict resolution semantics by
+choosing the types of CRTDs they model their application with.
 
-For example, one of the simplest operation based CRDT is the counter.
-An unbounded counter is a simple local integer whose operations are increment
-and decrement.
-Addition and subtraction commutes, no matter in which order the operations
-arrived, the replicas update their local integer and will converge to the
-same value.
+% There are two approaches to CRDTs: Operation-based CRDTs replicate their state
+% by transmitting only the update operation that are commutative.
+% State-based CRDTs send their full local state to other replicas and merge
+% incoming states with a commutative, associative and idempotent function~\cite{shapiro2011conflict}.
 
-AntidoteDB is a key-value store, where each value is a CRDT. AntidoteDB
-provides us a library of needed CRDT types.
-This means that the designer must map structures to the appropriate CRDT types
-and ensure that he can express the application’s operations with the set
-of operations offered by the chosen CRDT types.
-
-AntidoteDB implements for us the replication protocol and the
-persistence and acts as the only source of truth for our state.
-From the library of available CRDTs, we mainly use three kind:
-
-\begin{itemize}
-	\item \textbf{Remove Win Set} (RWSet): A set data structure with add and
-		  remove operations. When a conflicting concurrent add and remove
-		  are issued (of entries that are equal), the add operation is discarded.
-	\item \textbf{Remove Win Map} (RWMap): A map data structure that have also
-		  favor remove operation when conflict updates arise.
-	\item \textbf{Last Writer Win Register} (LWWR): A blob of data which
-	keep only the last update issued.
-\end{itemize}
+% For example, one of the simplest operation based CRDT is the counter.
+% An unbounded counter is a simple local integer whose operations are increment
+% and decrement.
+% Addition and subtraction commutes, no matter in which order the operations
+% arrived, the replicas update their local integer and will converge to the
+% same value.
 
 \subsection{Assumptions and objectives}
 
@@ -259,7 +311,7 @@ close as possible to a local file system.
 In summary, we want the following properties:
 
 \begin{itemize}
-	\item \textbf{Preserve intention}: We don’t want to perform too many actions
+	\item \textbf{Preserve intention}: We do not want to perform too many actions
 	or changes besides what the ones the user does. We want the user to be able
 	to develop a simple mental model to understand the underlying convergence
 	properties.
@@ -285,42 +337,39 @@ while providing users a simple interface to deal with conflicting updates.
 
 \subsection{The layered architecture of ElmerFS}
 
-From a hight level point of view, a ElmerFS deployment consists of a number
-of data centers.
-
+An ElmerFS deployment consists of a number of data centers.
 Each data center holds a full replica of the file system.
 Clients communicate with the data center nearest to them.
-All reads and writes are served by the local data center, without the need
-for coordination across data centers.
-Updates are asynchronously propagated between data centers.
-Data centers can continue serving user requests even if connectivity
+Every operation is served by the local data center, without the need
+for coordination across data centers,
+and updates are asynchronously propagated between data centers.
+A data center continues serving user requests even if connectivity
 with other data centers is lost due to network partitions.
 
 Within a data center, an ElmerFS cluster consists of an arbitrary number
-of nodes, and uses a shared-nothing architecture.
+of node, and uses a shared-nothing architecture.
+Typically, each node is deployed on a separate physical server.
 Unlike other storage systems in the industry, there is no minimal
-requirement concerning the number of nodes in a cluster. User requests are
-served as long as their is an available node in the data center.
+requirement concerning the number of servers in a cluster.
 
-A node in a data center is an ElmerFS process, which consists of the following
-layers.
+An ElmerFS node is daemon consisting of the following layers.
 
-\subsection{Interface}
+\subsubsection{Interface}
 
-The interface layer is responsible for handling the user interaction
-with the file system.
+The interface layer is responsible for handling interaction between the user
+and the file system.
 
-It is based on the FUSE protocol, a user-space protocol to implements
-file systems. It receives FUSE requests,
-matches them with the corresponding operation available in
-the translation layer, and creates the appropriate response.
-This layer implements the standard FS operations.
+It is based on the FUSE protocol, a user-space protocol for implementing
+file systems. The interface layer receives FUSE requests,
+matches them with the corresponding operation in
+the translation layer(\S~\ref{sec:transaction_layer}), and creates the appropriate response.
+% This layer implements the standard FS operations.
 
 ElmerFS is multi-threaded and asynchronous. Each FUSE request spawns an
 independent task that runs concurrently with other tasks.
 
-\subsection{Translation}
-
+\subsubsection{Translation}
+\label{sec:transaction_layer}
 The translation layer is responsible for translating FUSE requests
 to CRDT operations. It translates each high-level FS operation
 to a collection of operations on CRDTs.
@@ -328,12 +377,33 @@ to a collection of operations on CRDTs.
 All CRDT operations corresponding to a specific FS operation are bundled into
 a transaction. This ensures that FS operations are atomic.
 
-\subsection{Transactional CRDT}
+\subsubsection{CRDT}
 
-Requests from the translation layers are passed to the transactional CRDT
-layer that ensures that CRDTs are persisted.
-This layer is also responsible for replicating CRDTs across data centers.
+The CRDT layer is responsible for replicating CRDTs across data centers
+and providing persistence.
+
 ElmerFS relies on AntidoteDB for implementing this layer.
+AntidoteDB is a key-value store that models data as CRDTs.
+% AntidoteDB provides us a library of needed CRDT types.
+% This means that the designer must map structures to the appropriate CRDT types
+% and ensure that he can express the application’s operations with the set
+% of operations offered by the chosen CRDT types.
+
+% AntidoteDB implements for us the replication protocol and the
+% persistence and acts as the only source of truth for our state.
+% From the library of available CRDTs, we mainly use three kind:
+ElmerFS represents file system structures as CRDTs.
+It uses the following CRDT types provided by AntidoteDB:
+\begin{itemize}
+	\item \textbf{Remove Win Set} (RWSet): A set data structure with add and
+		  remove operations.
+      In an RWSet, when add operation conflicts with a concurrent remove
+		  operation, the add operation is discarded.
+	\item \textbf{Remove Win Map} (RWMap): A map data structure that
+		  favors remove operations when conflicts arise.
+	\item \textbf{Last Writer Win Register} (LWWR): A blob of data that
+	retains only the last applied update.
+\end{itemize}
 
 \subsection{Modeling the file system using CRDTs}
 
@@ -341,63 +411,82 @@ ElmerFS represents the state of the file system using CRDTs.
 In particular, it models four main entities: inode objects,
 symbolic links, blocks, and directories.
 An inode structure stores metadata for an inode in the file system.
-We represent the inode structure using a map data type (RWMap).
+We represent the inode structure using a Remove Wins Map (RWMap).
+A RWMap is a map data that merges conflicting add and remove operations
+in favor of the remove operations
 
-In ElmerFS, files are sparse (gaps are allowed).
-We use a register data type (LWReg) of fixed size file blocks.
-We only allocate blocks for ranges that have been written.
+We represent files as a collections of fixed size blocks.
+Each block is represented using a Last Writer Win Register (LWWR).
+A LWWR can be viewed as a blob of data that retains only the last applied update.
+For concurrent updates, a mechanism, typically based on replica identifiers,
+ensures that the same retained across all replicas.
 
 We represent symbolic links as a special case of files that store only
 the target path.
 
-We represent each directory using a RWSet. Directory entries in the set are
-ino - name pairs.
+We represent each directory using a Remove Win Set (RWSet) (a set data structure
+that merges conflicting operations in favor or remove operations).
+Directory entries in the set are inode number - name pairs.
 
 The file system hierarchy is implicit. A parent directory contains its child
 directories and a child directory keeps a pointer to its parent through
 the special ".." file.
 
-\section{Remaining correct}
+We chose the Remove Win semantics instead of its Add Win counterpart because
+it becomes easier to prevent partial state. We discuss this further
+in section~\ref{sec:deletion}.
+
+\section{Ensuring correctness}
 
 CRDTs ensure Strong Eventual Consistency (SEC)~\cite{shapiro2011conflict} but
-do not ensure that the application invariants remains correct
-nor it ensures that convergence lead to a state that is meaningful
+do not ensure that the application invariants remain correct
+nor that convergence leads to a state that is meaningful
 to the user.
 
 The challenge is to keep those invariant always correct under any sequence
 of operation while ensuring that no data or user intention is lost through
-unintended conflict resolution.
+conflict resolution.
 
-When translating our high level operations, we had to consider problems
-stated in section 2 and chose the proper CRDT types,
-what metadata needs to be stored and what sequence of
-CRDT operations needs to be issued to remain correct.
+In this section,
+we present how we address the challenges discussed in section~\ref{fs:weak}
+in ElmerFS through the choice of CRDT types for representing file system structures,
+the metadata that ElmerFS maintains, and the transaction of file system operations
+to operations on CRDTs.
+
+% When translating high level operations, we had to consider problems
+% stated in section and chose the proper CRDT types,
+% what metadata needs to be stored and what sequence of
+% CRDT operations needs to be issued to remain correct.
 
 \subsection{Generating the inode number}
-
-To address this, we use a global counter. Access to this counter
+\label{sec:generation_inode_number}
+We address this using a global counter. Access to this counter
 is serialized through a distributed lock.
 
 To reduce the overhead of the contention on this lock,
-each time that we access the global counter we reserve a range of ino that
-we will then consume locally.
-Note that we also don’t recycle ino of deleted inodes,
-we can’t assert that all replicas have converged to a state where the ino is
-not used anymore. Generating 100 000 files per second, it would take around
+each access to the global counter reserves a range of inode number which
+can then be consumed locally.
+
+Furthermore, ElmerFS does not recycle the inode number of deleted inodes.
+This is because ensuring that all replicas will converge to a state in which
+an inode number is not used anymore is not compatible with supporting offline
+operation (a replica in which the inode number is still in use can reconnect
+to the system after an arbitrarily long period of time).
+In practice this is not a problem.
+Generating 100.000 files per second, it would take around
 8 million years to exhaust this counter.
 
 \subsection{Ensuring deletion}
 
+\label{sec:deletion}
 To ensure that delete operations are honored, we chose to use map and set that
-honors concurrent removes.
+favor of remove operations in case of conflicts.
 
-Favoring concurrent remove operations in our file systems means
-that when an unlink is concurrent with a link or a rename,
-the unlink will prevail when replicas will converge.
-
-We can only update some key of the map and issue a remove operation on all
-possible existing keys (which is a finite amount when we are mapping
-structures) to ensure that the map will never converge to a partial state.
+Choosing a remove win semantic for our CRDT ensure that we don't get a partial
+state after a conflict resolution. If some operation that updates some keys of the
+inode structure is concurrent with an unlink that deletes all the keys, the
+CRDT won't be left with only the keys that were updated.
+All keys will be effectively removed.
 
 \subsection{Keeping the user intention}
 
@@ -434,11 +523,17 @@ Showing only FQN when the ViewID mismatch allows the user to continue to
 work by name on the file while other conflicting operations might be merged.
 We always favor the ViewID of the user that issued the request.
 
-For example, in a situation with two users,
-Bob and Alice where both have created a file name "us".
-If Bob tries to list the directory, he will see two files: "us" and "us:alice".
-To him "us" is still its own file and we do not lose any content when the CRDTs
-are merged.
+
+\begin{figure}[h]
+	\caption{An example of the name resolution in ElmerFS. The set above is
+	         what the folder contains.}
+	\Description{A folder contains two conflicting entries with similar names.
+	             The user is able to query its folder using a partial name or
+				 the one in conflict using the fully qualified name.}
+	\centering
+	\includegraphics[scale=0.6]{Le-bonhomme-sait-pas-ce-quil-veut.pdf}
+\end{figure}
+
 
 \subsection{Divergent renames}
 
@@ -478,7 +573,7 @@ Using the design described above we can imagine how ElmerFS behaves in case
 of a conflicting scenario.
 
 To illustrate this, let's take again Bob and Alice. Alice and Bob work
-on the same project but can't communicate. They don't want to wait and start to create a
+on the same project but can't communicate. They do not want to wait and start to create a
 folder named \textit{projectA}. Because the project will likely needs a report,
 they both start to create a report file \textit{report.doc} to enter their early work.
 
@@ -487,42 +582,47 @@ its own folder \textit{projectA} and another one \textit{projectA:Alice}.
 He knowns that Alice must have put useful information in her folder and he
 decide to merge the two and simply move all file from \textit{projectA:Alice}.
 
-Alice inspect its folder and sees that Bob wasn't really attentive
-and merged their folder even though they had two identical
-\textit{report.doc} files.
-She sees both \textit{report.doc} and \textit{report.doc:Bob},
-adds the modification done by Bob in its file.
+They can both continue to work on their project without worrying about
+conflict or implicit merges. After some time Bob and Alice agree to merge
+their work. Alice remove its folder.
 
-After an agreement between Alice and Bob, Bob decide to remove its report file.
-Now they both see a unique file tree \textit{projectA/report.doc}.
+They both see a unique file tree \textit{projectA/report.doc}.
 
 This sequence is very close to what a user might expect when working with
 a local file system.
 
-\section{Future work and exploration ideas}
+\begin{figure}[h]
+	\caption{Alice and Bob conflict scenario.}
+	\Description{Alice and Bob creates a folder without a connection,
+				 they both see their own folder with the original name
+				 and the one in conflict}
+	\centering
+	\includegraphics[scale=0.5]{AliceBob-font-des-fichiers.pdf}
+\end{figure}
 
+\section{Direction for future research}
 \label{crdt:future}
 
 \subsection{Concurrent ino number generation and recycling}
 
-Our solution to generate an ino number depicted in 4.1 is not truly concurrent.
-To solve this issue and to be able to reuse previously used id,
-a specialized CRDT might be needed.
-One possible path to construct such CRDT would be to take inspiration
+Our solution to generate an inode number described in section~\ref{sec:generation_inode_number}
+is not truly concurrent.
+To address this, and to be able to recycle inode numbers,
+a specialized CRDT type might be needed.
+A possible solution for specifying such a CRDT type would be to take inspiration
 from sequence CRDT used for text processing application where each inserted
-character is assigned an unique position (LSEQ~\cite{nedelec2013lseq}, TreeDoc~\cite{letia2009crdts}].
+character is assigned an unique position \cite{nedelec2013lseq, letia2009crdts}.
 
 \subsection{Cycle with concurrent rename}
 
-Our implicit hierarchy using map CRDTs does not prevent cycles to be created.
-Some CRDT tree design exists [Tree CRDT] but relies on multiple correction
+Our implicit hierarchy using map CRDTs does not prevent cycles from being created.
+Some CRDT tree design exists~\cite{martin2012abstract} and relies on multiple correction
 layers that perform additional operations to recover from the broken invariants.
 We believe that both this issue could be solved by the use of a conditional transaction framework.
-The idea would be to merge operations only if they fulfill a user
-provided condition.
+The key idea would be to merge operations only if they satisfy a specified condition.
 
 For cycles, this would be that the resulting tree does not have a cycle.
-Transactions that don't respect the condition should be discarded
+Transactions that do not satisfy this condition should be discarded
 in a deterministic manner to ensure convergence.
 
 \subsection{Dealing with Orphan CRDTs}
@@ -531,39 +631,51 @@ Our deletion strategy solely relies on issuing a delete operation for all
 known CRDT of an entity.
 
 For file content, where we store an implicit and unbounded number of CRDT,
-concurrent add operations merges can lead to some content lingering around
-without an entity to reference them.
+merging concurrent add operations can result file blocks without any to reference them.
 
 Tombstones are sometimes used in CRDT design, but here we need a mechanism
 to link and propagate deletion across multiple CRDT.
 
-We aren’t aware of any protocol that allows this.
+We are not aware of any protocol that allows this.
 A possible framework could rely on a unique tombstone and use conditional
 transactions described in the previous section to discard concurrent
 add operations.
 
 \section{Conclusion}
 
-In the paper, we explored the design of a truly concurrent shared geo-replicated
-file system based on CRDTs.
+In the paper, we explore the challenges in the design of geo-replicated file
+systems under weak consistency,
+and present the design of ElmerFS, a CRDT-based file system.
 
-The solutions that we propose for our problems allow ElmerFS to expose
-conflicts in a simple interface while preserving the POSIX FS invariants
-for some sequence of operations.
+Conflict resolution in ElrmerFS is based on the goal of preserving user
+intention.
+ElmerFS ensures all file system replicas eventually converge to the same state,
+while also allowing users to complement or reverse the results of conflict resolution
+through a simple interface that preserves the standard file system POSIX semantics.
 
-We hope that the solutions described in this paper to ensure that
-the application remains correct with only set and maps CRDTs can provide ideas
-and can help solving similar convergence issues that might arise
-in other applications.
+We have implemented a prototype of ElmerFS and are in the process of performing
+experimental evaluation.
 
-In section~\ref{crdt:future} we see that they are still many paths to explore,
-conditional transaction, if they are applicable, might be a solution to some
-of these issue. Permissions and CRDTs merge semantics are a
-challenging topic~\cite{yanakieva2021access}.
+While there remain open problems to be addressed,
+we believe that leveraging the properties of CRDTs is a promising path towards
+highly available and truly concurrent file systems.
+ 
 
-We believe that CRDTs for file system are a path toward highly available
-and truly concurrent file systems and hope that more work
-goes into this direction.
+
+
+% We hope that the solutions described in this paper ensure that
+% the application remains correct with only set and maps CRDTs can provide ideas
+% and can help solving similar convergence issues that might arise
+% in other applications.
+
+% In section~\ref{crdt:future} we see that they are still many paths to explore,
+% conditional transaction, if they are applicable, might be a solution to some
+% of these issue. Permissions and CRDTs merge semantics are a
+% challenging topic~\cite{yanakieva2021access}.
+
+% We believe that CRDTs for file system are a path toward highly available
+% and truly concurrent file systems and hope that more work
+% goes into this direction.
 
 \bibliographystyle{ACM-Reference-Format}
 \bibliography{elmerpap}
