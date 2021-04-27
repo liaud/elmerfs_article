@@ -126,17 +126,13 @@ We demonstrate this mechanism through conflict resolution examples.
 \ccsdesc[500]{Computer systems organization~Availability}
 \ccsdesc[500]{Computer systems organization~Reliability}
 
-\keywords{ACM proceedings, \LaTeX, text tagging}
+% \keywords{ACM proceedings, \LaTeX, text tagging}
 
 \maketitle
 
 \sloppy
 
 \section{Introduction}
-
-% Modern services rely on infrastructures composed of multiple geographically
-% distributed data centers for  ensuring fault-tolerance and
-% achieving high performance and scalability.
 
 File systems services are essential for data sharing and collaboration among users.
 These services must provide low response time, remain available in the persistence
@@ -180,33 +176,6 @@ intention.
 Finally, we demonstrate through conflict resolution examples that a CRDT-based
 file system design can provide conflict resolution semantics that are intuitive
 to the user.
-
-%  ElmerFS, a POSIX-compliant geo-replicated
-% file system that allows users to resolve conflicts using known FS operations.
-
-% ElmerFS does not require coordination between replicas, ensures correctness in the face of concurrent conflicting updates and remains available under network partition and server crashes.
-
-% The design of ElmerFS is based on Conflict-free Replicated Data Types (CRDTs), replicated data structures that ensure that modifications performed on different replicas can always be merged into a consistent state.
-
-% System designers have long sought to design geo-replicated file systems
-% allowing concurrent updates on multiple replicas (active-active replication)
-% that are correct, remain available under partitions,
-% and provide high performance \cite{pike1995plan, howard1988scale}.
-
-% One approach is to rely on strong consistency, ensuring that replicas agree on a single, global order of operations. Ordering operations across replicas, however, requires coordination among geographically distributed nodes, and therefore comes at the cost of performance overheads and reduced availability under network partitions.
-
-% An alternative approach is to provide weak consistency guarantees.
-% This approach does not require coordination among replicas, and ensures availability under network partitions.
-
-% However, resolving conflicts while ensuring that file system invariants are maintained and user operations not discarded is hard.
-
-% Existing systems that accept concurrent updates on multiple replicas without coordination fail both to converge to a predictable state and
-% to keep the user's original intention when the operation was issued~\cite{cai2018some}.
-% Convergence of those systems can leads to directories being merged,
-% files being lost or having their content mixed in unexpected manners.
-
-
-
 
 \section{Designing a file system}
 
@@ -260,7 +229,7 @@ among them presents several challenges:
   % The file system may be left with a partial inode that is not fully deleted but apparent.
   Moreover, even if a common conflict resolution is applied to all replicas, the
   result might not be what the user expects from the system.
-	\item \textbf{Permissions changes}: Updating permission from a replica may not
+  \item \textbf{Permissions changes}: Updating permission from a replica may not
   be propagated directly to other replicas.
   Merging an operation that removes a Bob's permission to write to file with a
   concurrent operation in which Bob writes
@@ -286,18 +255,6 @@ definition.
 Therefore, application developers can control their conflict resolution semantics by
 choosing the types of CRTDs they model their application with.
 
-% There are two approaches to CRDTs: Operation-based CRDTs replicate their state
-% by transmitting only the update operation that are commutative.
-% State-based CRDTs send their full local state to other replicas and merge
-% incoming states with a commutative, associative and idempotent function~\cite{shapiro2011conflict}.
-
-% For example, one of the simplest operation based CRDT is the counter.
-% An unbounded counter is a simple local integer whose operations are increment
-% and decrement.
-% Addition and subtraction commutes, no matter in which order the operations
-% arrived, the replicas update their local integer and will converge to the
-% same value.
-
 \subsection{Assumptions and objectives}
 
 We want to leverage CRDTs to develop a file system that is always available
@@ -311,25 +268,24 @@ close as possible to a local file system.
 In summary, we want the following properties:
 
 \begin{itemize}
-	\item \textbf{Preserve intention}: We do not want to perform too many actions
-	or changes besides what the ones the user does. We want the user to be able
-	to develop a simple mental model to understand the underlying convergence
-	properties.
+	\item \textbf{Preserve intention}: We minimize changes not initiated by the user.
+	The user should to be able to develop a simple mental model to understand
+	the underlying convergence properties.
 	\item \textbf{Truly concurrent operations}: One way to handle concurrency
-	is to serialize operations applied on the relevant objects.
+	is to use consensus to serialize operations applied on the relevant objects.
 	CRDTs avoid this and allow true concurrency without the need for
 	a consensus.
 	\item \textbf{Follow the POSIX standard}.
 	\item \textbf{Atomic operation}: No matter how complex a FS operation is,
 		  it should be either performed are completely discarded.
-	\item \textbf{Always available}: CRDT types allow us to design systems that
+	\item \textbf{Always available}: CRDT types permit the design of design systems that
 	are always available even under extreme network conditions.
 	\item \textbf{Active-Active}: Several replicas accept operations
-	(structural and updates) concurrently and propagate them from one another,
+	(structural and updates) concurrently and propagate them from one-another,
 	even after long delays.
 \end{itemize}
 
-Focus has been put on building on CRDTs to create a highly resilient and truly
+A Focus has been placed on building on CRDTs to create a highly resilient and truly
 concurrent file system that follows the strict POSIX invariants
 while providing users a simple interface to deal with conflicting updates.
 
@@ -359,7 +315,7 @@ An ElmerFS node is daemon consisting of the following layers.
 The interface layer is responsible for handling interaction between the user
 and the file system.
 
-It is based on the FUSE protocol, a user-space protocol for implementing
+It is based on the FUSE protocol, a user-space protocol used to implement
 file systems. The interface layer receives FUSE requests,
 matches them with the corresponding operation in
 the translation layer(\S~\ref{sec:transaction_layer}), and creates the appropriate response.
@@ -371,11 +327,11 @@ independent task that runs concurrently with other tasks.
 \subsubsection{Translation}
 \label{sec:transaction_layer}
 The translation layer is responsible for translating FUSE requests
-to CRDT operations. It translates each high-level FS operation
+to CRDT operations. Each high-level FS operation is translated
 to a collection of operations on CRDTs.
 
 All CRDT operations corresponding to a specific FS operation are bundled into
-a transaction. This ensures that FS operations are atomic.
+a single transaction. This ensures that FS operations are atomic.
 
 \subsubsection{CRDT}
 
@@ -384,14 +340,7 @@ and providing persistence.
 
 ElmerFS relies on AntidoteDB for implementing this layer.
 AntidoteDB is a key-value store that models data as CRDTs.
-% AntidoteDB provides us a library of needed CRDT types.
-% This means that the designer must map structures to the appropriate CRDT types
-% and ensure that he can express the application’s operations with the set
-% of operations offered by the chosen CRDT types.
 
-% AntidoteDB implements for us the replication protocol and the
-% persistence and acts as the only source of truth for our state.
-% From the library of available CRDTs, we mainly use three kind:
 ElmerFS represents file system structures as CRDTs.
 It uses the following CRDT types provided by AntidoteDB:
 \begin{itemize}
@@ -430,7 +379,7 @@ Directory entries in the set are inode number - name pairs.
 
 The file system hierarchy is implicit. A parent directory contains its child
 directories and a child directory keeps a pointer to its parent through
-the special ".." file.
+the special ".." named file.
 
 We chose the Remove Win semantics instead of its Add Win counterpart because
 it becomes easier to prevent partial state. We discuss this further
@@ -453,11 +402,6 @@ in ElmerFS through the choice of CRDT types for representing file system structu
 the metadata that ElmerFS maintains, and the transaction of file system operations
 to operations on CRDTs.
 
-% When translating high level operations, we had to consider problems
-% stated in section and chose the proper CRDT types,
-% what metadata needs to be stored and what sequence of
-% CRDT operations needs to be issued to remain correct.
-
 \subsection{Generating the inode number}
 \label{sec:generation_inode_number}
 We address this using a global counter. Access to this counter
@@ -467,20 +411,19 @@ To reduce the overhead of the contention on this lock,
 each access to the global counter reserves a range of inode number which
 can then be consumed locally.
 
-Furthermore, ElmerFS does not recycle the inode number of deleted inodes.
+Furthermore, ElmerFS, does not recycle the inode number of deleted inodes.
 This is because ensuring that all replicas will converge to a state in which
 an inode number is not used anymore is not compatible with supporting offline
 operation (a replica in which the inode number is still in use can reconnect
 to the system after an arbitrarily long period of time).
-In practice this is not a problem.
-Generating 100.000 files per second, it would take around
+It can be noted that, generating 100 000 files per second, it would take around
 8 million years to exhaust this counter.
 
 \subsection{Ensuring deletion}
 
 \label{sec:deletion}
-To ensure that delete operations are honored, we chose to use map and set that
-favor of remove operations in case of conflicts.
+To ensure that delete operations are honored, we chose to use maps and sets that
+honor concurrent removes.
 
 Choosing a remove win semantic for our CRDT ensure that we don't get a partial
 state after a conflict resolution. If some operation that updates some keys of the
@@ -490,8 +433,8 @@ All keys will be effectively removed.
 
 \subsection{Keeping the user intention}
 
-In ElmerFS, we allow names conflict to happen and we expect the user solves
-those conflicts using standard FS operations that he is familiar with.
+In ElmerFS, we allow names conflict to happen and we expect users to solve
+those conflicts using standard FS operations that they are is familiar with.
 
 To be able to distinguish between two inodes sharing the same name under
 the same parent directory, we use an additional internal unique identifier,
@@ -512,14 +455,14 @@ Fully Qualified Names (FQNs).
 Partial names are how the user named the link,
 FQN are partial names concatenated with the ViewID.
 Since the ViewID is unique, we know that all visible links are uniquely
-identifiable. Meaning that at anytime the user can chose to refer to its file
+identifiable. This means that at anytime the user can chose to refer to its file
 from the partial name of the FQN.
 
 In a situation where no conflict exists, we always show partial names.
 When there is a conflict, we only show FQN of entries that have a ViewID that
-doesn’t match the one used by the user.
+does not match the one used by the user.
 
-Showing only FQN when the ViewID mismatch allows the user to continue to
+Showing only FQN when the ViewIDs mismatch allows the user to continue to
 work by name on the file while other conflicting operations might be merged.
 We always favor the ViewID of the user that issued the request.
 
@@ -541,9 +484,9 @@ Without coordination, \textit{mkdir} and \textit{mknod} are not the only
 operations that can create a link. (See section~\ref{fs:weak} for problematic
 renames).
 
-Because of this situation, using a counter to track the number of links is not
-enough anymore because at the time we issue the \textit{rename} operation
-we cannot know if the operation will be concurrent.
+Because of this situation, using a counter to track the number of links is no
+longer sufficient because at the time we issue the \texit{rename} operation
+we cannot know if the operation will end up being concurrent.
 
 To keep track of the number of links, we use another RWSet that is
 always updated alongside the directory entries updates.
@@ -554,7 +497,7 @@ We use the ViewID again to have the exact same semantics as the set storing
 the directory entries. Thus the link set is always valid with respect to
 links currently visible in the FS.
 
-However, this solution by itself is not enough to ensure that directories have a
+However, this solution by itself is not sufficient to ensure that directories have a
 unique parent at all times.
 
 This is solved with an additional Last Writer Win register that serves us as
@@ -562,7 +505,7 @@ an arbitrator to decide which link is valid.
 
 Each time we load directories  entries, we check the parent register of each
 entry that points to a directory. If the entry comes from a parent that doesn’t
-match the value of the register, it is lazily removed and never shown to the user.
+match the value of the register, it is garbage collected and never shown to the user.
 Because the register is always updated inside the same transaction, the
 value of the register always matches the update that add the entry
 to the parent.
@@ -570,21 +513,19 @@ to the parent.
 \subsection{A simple conflict scenario}
 
 Using the design described above we can imagine how ElmerFS behaves in case
-of a conflicting scenario.
+of a conflict.
 
-To illustrate this, let's take again Bob and Alice. Alice and Bob work
-on the same project but can't communicate. They do not want to wait and start to create a
+To illustrate this, let's consider again Bob and Alice. Alice and Bob work
+on the same project but cannot communicate. They do not want to wait and start by creating a
 folder named \textit{projectA}. Because the project will likely needs a report,
-they both start to create a report file \textit{report.doc} to enter their early work.
+they both create a report file \textit{report.doc} to enter their early work.
 
 Once the connection reestablished, Bob see that there is now two folders:
-its own folder \textit{projectA} and another one \textit{projectA:Alice}.
-He knowns that Alice must have put useful information in her folder and he
-decide to merge the two and simply move all file from \textit{projectA:Alice}.
+his own folder \textit{projectA} and another one \textit{projectA:Alice}.
 
 They can both continue to work on their project without worrying about
 conflict or implicit merges. After some time Bob and Alice agree to merge
-their work. Alice remove its folder.
+their work. Alice remove its old no longer relevant folder.
 
 They both see a unique file tree \textit{projectA/report.doc}.
 
@@ -609,29 +550,30 @@ Our solution to generate an inode number described in section~\ref{sec:generatio
 is not truly concurrent.
 To address this, and to be able to recycle inode numbers,
 a specialized CRDT type might be needed.
-A possible solution for specifying such a CRDT type would be to take inspiration
+A possible solution for specifying such a CRDT type would be to draw inspiration
 from sequence CRDT used for text processing application where each inserted
 character is assigned an unique position \cite{nedelec2013lseq, letia2009crdts}.
 
 \subsection{Cycle with concurrent rename}
 
-Our implicit hierarchy using map CRDTs does not prevent cycles from being created.
-Some CRDT tree design exists~\cite{martin2012abstract} and relies on multiple correction
+Our implicit hierarchy using map CRDTs does not prevent the creation of cycles.
+Some CRDT tree design exists~\cite{martin2012abstract} but relies on multiple correction
 layers that perform additional operations to recover from the broken invariants.
 We believe that both this issue could be solved by the use of a conditional transaction framework.
 The key idea would be to merge operations only if they satisfy a specified condition.
 
-For cycles, this would be that the resulting tree does not have a cycle.
+For cycles, this would simply be that the resulting tree does not have a cycle.
 Transactions that do not satisfy this condition should be discarded
 in a deterministic manner to ensure convergence.
 
 \subsection{Dealing with Orphan CRDTs}
 
-Our deletion strategy solely relies on issuing a delete operation for all
-known CRDT of an entity.
+Our deletion strategy relies solely on issuing a delete operation for all
+known CRDTs of an entity.
 
 For file content, where we store an implicit and unbounded number of CRDT,
-merging concurrent add operations can result file blocks without any to reference them.
+concurrent add operations merges can lead to content lingering
+without an entity to reference it.
 
 Tombstones are sometimes used in CRDT design, but here we need a mechanism
 to link and propagate deletion across multiple CRDT.
@@ -643,8 +585,8 @@ add operations.
 
 \section{Conclusion}
 
-In the paper, we explore the challenges in the design of geo-replicated file
-systems under weak consistency,
+In the paper, we explore the challenges in the design of a truly
+concurrent shared geo-replicated file systems under weak consistency,
 and present the design of ElmerFS, a CRDT-based file system.
 
 Conflict resolution in ElrmerFS is based on the goal of preserving user
@@ -658,24 +600,8 @@ experimental evaluation.
 
 While there remain open problems to be addressed,
 we believe that leveraging the properties of CRDTs is a promising path towards
-highly available and truly concurrent file systems.
- 
-
-
-
-% We hope that the solutions described in this paper ensure that
-% the application remains correct with only set and maps CRDTs can provide ideas
-% and can help solving similar convergence issues that might arise
-% in other applications.
-
-% In section~\ref{crdt:future} we see that they are still many paths to explore,
-% conditional transaction, if they are applicable, might be a solution to some
-% of these issue. Permissions and CRDTs merge semantics are a
-% challenging topic~\cite{yanakieva2021access}.
-
-% We believe that CRDTs for file system are a path toward highly available
-% and truly concurrent file systems and hope that more work
-% goes into this direction.
+highly available and truly concurrent file systems and believe that future
+work should go in this direction.
 
 \bibliographystyle{ACM-Reference-Format}
 \bibliography{elmerpap}
