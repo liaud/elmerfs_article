@@ -172,28 +172,6 @@ to the user.
 
 \section{Designing a file system}
 
-\subsection{File system invariants}
-
-POSIX's file systems organize files and directories in a tree structure.
-To design our file system we focus on the following tree invariants:
-
-\begin{enumerate}
-\item Tree nodes are always reachable from the root directory.
-\item Directories can have at most one parent node.
-\item Cycles are possible only through symbolic links.
-\end{enumerate}
-
-We categorize two types of operations.
-Structural operations, which can be used to manipulate the file system
-structure (the tree), and content operations,
-which can be used to store and retrieve information from files.
-
-File systems are commonly represented internally as a collection of inodes.
-We do not depart from this representation:
-An inode represents a file system object (file, directory or symbolic link).
-Each inode is identified by a unique numeric identifier (an ino).
-A link is a reference to an inode. A directory entry is a named and visible representation of a link.
-
 \subsection{File systems under weak consistency}
 \label{fs:weak}
 
