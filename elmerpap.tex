@@ -1,5 +1,5 @@
 %\documentclass[sigconf]{acmart}
-\documentclass[sigconf,anonymous,10pt]{acmart}
+\documentclass[sigconf, anonymous, 10pt]{acmart}
 \usepackage{graphicx}
 \graphicspath{ {./images/} }
 
@@ -42,10 +42,24 @@
 \affiliation{%
   \institution{Scality}
   \city{Paris}
-  \state{France}
+  \country{France}
 }
 \email{romain.vaillant@scality.com}
 
+\author{Dimitrios Vasilas}
+\affiliation{%
+  \institution{Scality}
+  \city{Paris}
+  \country{France}
+}
+\email{dimitrios.vasilas@lip6.fr}
+
+\author{Marc Shapiro}
+\affiliation{%
+	\institution{Inria & Lip6}
+	\city{Paris}
+	\counter{France}
+}
 
 % The default list of authors is too long for headers.
 \renewcommand{\shortauthors}{R. Vaillant et al.}
@@ -56,17 +70,19 @@ These systems need to resolve conflicts that emerge in concurrent operations in 
 that maintains the file system invariants, is meaningful to the user,
 and does not depart from the traditional file system interface.
 Conflict resolution in existing systems often leads to unexpected or inconsistent
-results.
-This paper presents the design of ElmerFS, a geo-replicated, truly concurrent
+results. This paper introduces ElmerFS, a geo-replicated, truly concurrent
 file system built with the aim of addressing these challenges.
-Conflict resolution in ElmerFS is designed with the principle of preserving
-user intention.
-File system replicas converge to a common state through the use of Conflict-free
-replicated data types (CRDTs) for representing file system structures.
-The resulting state informs the user about the resolved conflict in an intuitive way.
-The user can then complement or reverse the conflict resolution outcome using
+ElmerFS is based on two key ideas: (1) the use of Conflict-Free
+Replicated Data Types (CRDTs) for representing file system structures, which
+ensures that replicas converge to a correct state,
+and (2) conflict resolution rules, which are determined by the choice
+of CRDT types and their composition, designed with the principle of being intuitive to the user.
+We argue that if the state of the file system after resolving a conflict conveys
+to the user the resolved conflict in an intuitive way,
+the user can complement or reverse the conflict resolution outcome using
 traditional file system operations.
-We demonstrate this mechanism through conflict resolution examples.
+We present the design of ElmerFS and demonstrate conflict resolution
+in ElmerFS through an example.
 
 \end{abstract}
 
@@ -128,15 +144,15 @@ We demonstrate this mechanism through conflict resolution examples.
 \section{Introduction}
 
 File systems services are essential for data sharing and collaboration among users.
-These services must provide low response time, remain available in the persistence
+These services must provide low response time, remain available in the presence
 of network partitions, and provide support for offline work \cite{howard1988scale}.
-To achieve these goals, these services typically rely on systems that replicate
+To achieve these goals, these services typically replicate
 data among geographically distant sites and serve each user request from the replica
 closer to the user, without coordination with other replicas.
 
 This type of design allows replicas to accept concurrent operations that conflict
 with one another, for example concurrently creating two files with the same name
-under the same directly on two different replicas.
+under the same directory on two different replicas.
 As a result, these systems face two challenges:
 resolving conflicts between concurrent operations in a way that is meaningful to
 the users while maintaining file system invariants,
@@ -144,31 +160,42 @@ and ensuring support for legacy applications that have not been developed with
 mechanisms for dealing with concurrency anomalies.
 
 It has been shown that existing file system services that support collaboration
-and offline work merge some conflicts in inconsistent, non-deterministic or
+and offline work resolve some conflicts in inconsistent, non-deterministic or
 unexpected ways \cite{cai2018some, taothanh:tel-01673030}.
-For example, in Google Drive the conflict described above can result in two
-replicas presenting two different views of the file system to users.
+For example, in Google Drive the conflict described above can result in replicas presenting different views of the file system.
 
 This makes it difficult for users to have an intuitive understanding about
 the behaviors of these services,
 leading to misconceptions on their expected behavior~\cite{tang2013you}.
-Moreover, enabling more flexible conflict resolution by exporting some decisions
-to the users while maintaining support for legacy applications through POSIX
-compliance is challenging.
 
-In this paper, we present a comprehensive analysis of the challenges in the
-design of geo-replicated weakly consistent file systems.
-Guided by this analysis, we propose ElmerFS,
+A solution to that could involve more flexible conflict resolution mechanisms,
+for example requiring user input in the process of conflict resolution.
+However, enabling such functionality while maintaining support for legacy applications
+through POSIX compliance is challenging.
+
+% To prevent some operations to be lost and to allow the user to build a simple
+% mental model of the file system, we must enable more flexible conflict resolution
+% by exporting some decisions to the user.
+
+% Because applications that expect POSIX compliance are widely common, this
+% hard challenge must be dealt with, file system designer have to build a
+% solution that both allows interactive conflict resolution
+% and preserves the POSIX file system invariants.
+
+In this paper, we present a comprehensive analysis of the challenges in
+the design of geo-replicated weakly consistent file systems.
+Guided by this analysis, we introduce ElmerFS,
 a geo-replicated file system that provides intuitive conflict resolution
 semantics, while maintaining support for legacy applications.
-The design of ElmerFS leverages the properties of Conflict-free replicated data
-types (CRDTs) to ensure that concurrent operations on different replicas always
-converge into a consistent state.
-The guiding design principle is that conflict resolution should preserve user
-intention.
-Finally, we demonstrate through conflict resolution examples that a CRDT-based
-file system design can provide conflict resolution semantics that are intuitive
-to the user.
+The design of ElmerFS leverages the properties of Conflict-Free Replicated Data
+Types (CRDTs) to ensure that concurrent operations on different replicas always
+converge to a correct state.
+The guiding principle for designing conflict resolution in ElmerFS is that
+it should be intuitive to the user.
+This is achieved by designing conflict resolution rules that
+(1) preserve the effects of conflicting operations as much as possible,
+and (2) do not introduce changes not explicitly expressed by the conflicting
+operations.
 
 \section{Designing a file system}
 
@@ -186,7 +213,7 @@ among them presents several challenges:
 	In practice, this is addressed using 16 byte ids.
 	However, this is not compatible with the POSIX specification, which requires 8 byte ids.
 	\item \textbf{Named links}: Operations that create or move objects (files or directories)
-	may result in conflicts in which concurrent operations οn different replicas create
+	may result in conflicts in which concurrent operations on different replicas create
 	objects with the same name in the same directory.
 	Existing systems resolve naming conflicts between files by automatically renaming
   files, and conflicts between directories either by renaming or by merging them.
@@ -196,68 +223,57 @@ among them presents several challenges:
 	directory B with a concurrent operation that moves B into A can result in a cycle.
   Merging two concurrent operations that move the same directory
 	to different destinations can result in a directory with two parents.
-  \item \textbf{Deletion of inodes}: Concurrent link and unlink operations may result in different behavior depending on the order in which operations are applied on each replica.
-  % The file system may be left with a partial inode that is not fully deleted but apparent.
-  Moreover, even if a common conflict resolution is applied to all replicas, the
-  result might not be what the user expects from the system.
-  \item \textbf{Permissions changes}: Updating permission from a replica may not
-  be propagated directly to other replicas.
-  Merging an operation that removes a Bob's permission to write to file with a
-  concurrent operation in which Bob writes
-  to that file will result in a different outcome depending on the order in which
-  operations are applied.
+  \item \textbf{Deletion of inodes}: Concurrent unlink operations
+  that triggers an inode deletion may result in an inode that is still accessible but left in a partial state.
+  \item \textbf{Permissions changes}: Updating permission from a replica may take some time to be enforced in other replicas.
+  Merging an operation that removes a Bob's permission to write to file with a concurrent operation in which Bob writes
+  to that file will result in a different outcome depending on the order in which operations are applied.
   % (This is very interesting but can create a lot of questions, it's maybe better to avoid mentioning permissions)
 \end{itemize}
 
-\subsection{Conflict-Free Replicated Data Types}
+\subsection{Assumptions and objectives}
 
 Ensuring that all replicas converge to the same state without coordination
 is not trivial.
 
 Conflict-Free Replicated Data Types (CRDTs) are data structures that
-can be replicated across multiple replicas, and these replicas can be updated independently and concurrently without coordination.
+can be replicated across multiple replicas,
+and these replicas can be updated independently and concurrently without coordination~\cite{shapiro2011conflict}.
 
 By construction, CRDTs guarantee that modifications on different
 replicas can always be merged into a consistent state without requiring
 any special conflict resolution code or user intervention.
 
-Moreover, the rules used for conflict resolution are parts of each CRDT's
-definition.
+Moreover, the rules used for conflict resolution are parts of each CRDT's definition.
 Therefore, application developers can control their conflict resolution semantics by
 choosing the types of CRTDs they model their application with.
 
-\subsection{Assumptions and objectives}
-
-We want to leverage CRDTs to develop a file system that is always available
+We leverage CRDTs to develop a file system that is always available
 and that provides good response times whatever the network conditions.
 It must support active/active configurations
 (i.e. two geographically distant clusters can issue read, write and structural
 operation at the same time without coordination with each other).
 
-Given the requirements, we want to keep the behavior of the file system as
-close as possible to a local file system.
+The behavior of the file system should remain as close as possible to a local file system.
 In summary, we want the following properties:
 
 \begin{itemize}
-	\item \textbf{Preserve intention}: We minimize changes not initiated by the user.
+	\item \textbf{Preserve intention}: We minimize changes not explicitly requested by the user.
 	The user should to be able to develop a simple mental model to understand
 	the underlying convergence properties.
-	\item \textbf{Truly concurrent operations}: One way to handle concurrency
+	\item \textbf{Truly concurrent operations}: The FS should be always available even under extreme network conditions.
+	One way to handle concurrency
 	is to use consensus to serialize operations applied on the relevant objects.
-	CRDTs avoid this and allow true concurrency without the need for
-	a consensus.
+	CRDTs avoid this and allow true concurrency without the need for a consensus.
 	\item \textbf{Follow the POSIX standard}.
-	\item \textbf{Atomic operation}: No matter how complex a FS operation is,
-		  it should be either performed are completely discarded.
-	\item \textbf{Always available}: CRDT types permit the design of design systems that
-	are always available even under extreme network conditions.
+	\item \textbf{Atomic operation}: No matter how complex a FS operation is, it should be either performed or completely discarded.
 	\item \textbf{Active-Active}: Several replicas accept operations
 	(structural and updates) concurrently and propagate them from one-another,
 	even after long delays.
 \end{itemize}
 
-A Focus has been placed on building on CRDTs to create a highly resilient and truly
-concurrent file system that follows the strict POSIX invariants
+Our focus therefore is to leverage CRDTs to create a highly resilient and
+truly concurrent file system that follows the strict POSIX invariants
 while providing users a simple interface to deal with conflicting updates.
 
 \section{System Overview}
@@ -393,14 +409,14 @@ It can be noted that, generating 100 000 files per second, it would take around
 \subsection{Ensuring deletion}
 
 \label{sec:deletion}
-To ensure that delete operations are honored, we chose to use maps and sets that
-honor concurrent removes.
+To ensure that delete operations are honored, we chose to use maps and
+sets that honor concurrent removes.
 
 Choosing a remove win semantic for our CRDT ensure that we don't get a partial
-state after a conflict resolution. If some operation that updates some keys of the
-inode structure is concurrent with an unlink that deletes all the keys, the
-CRDT won't be left with only the keys that were updated.
-All keys will be effectively removed.
+state after a conflict resolution. For map with a fixed set of keys,
+if an add operation is concurrent with a remove operation,
+we won't converge to a CRDT with a state that contains only
+the keys that were updated at that time.
 
 \subsection{Keeping the user intention}
 
@@ -488,9 +504,8 @@ Using the design described above we can imagine how ElmerFS behaves in case
 of a conflict.
 
 To illustrate this, let's consider again Bob and Alice. Alice and Bob work
-on the same project but cannot communicate. They do not want to wait and start by creating a
-folder named \textit{projectA}. Because the project will likely needs a report,
-they both create a report file \textit{report.doc} to enter their early work.
+on the same project but cannot communicate. They do not want to wait and start by creating a folder named \textit{projectA}. Because the project will likely needs a report,
+they both create a report file \textit{report.doc} to type in their early work.
 
 Once the connection reestablished, Bob see that there is now two folders:
 his own folder \textit{projectA} and another one \textit{projectA:Alice}.
@@ -501,8 +516,7 @@ their work. Alice remove its old no longer relevant folder.
 
 They both see a unique file tree \textit{projectA/report.doc}.
 
-This sequence is very close to what a user might expect when working with
-a local file system.
+Note that this sequence is very close to what a user might expect when working with a local file system. While this example was about folder name conflicts file behaves in the same manner, reducing risks of data loss.
 
 \begin{figure}[h]
 	\caption{Alice and Bob conflict scenario.}
@@ -557,15 +571,16 @@ add operations.
 
 \section{Conclusion}
 
-In the paper, we explore the challenges in the design of a truly
-concurrent shared geo-replicated file systems under weak consistency,
-and present the design of ElmerFS, a CRDT-based file system.
+In this paper, we explore the challenges in the design of a truly
+concurrent shared geo-replicated file systems under weak consistency.
 
-Conflict resolution in ElrmerFS is based on the goal of preserving user
-intention.
-ElmerFS ensures all file system replicas eventually converge to the same state,
-while also allowing users to complement or reverse the results of conflict resolution
-through a simple interface that preserves the standard file system POSIX semantics.
+We propose ElmerFS, a CRDT-based file system.
+ElmerFS ensures file system replicas eventually converge to a common,
+correct state in the present of conflicting operations.
+Conflict resolution in ElmerFS is designed with the aim of
+not resulting in unexpected results.
+We argue that this enables users to complement or reverse the results of conflict resolution
+through traditional file system operations.
 
 We have implemented a prototype of ElmerFS and are in the process of performing
 experimental evaluation.
@@ -574,6 +589,16 @@ While there remain open problems to be addressed,
 we believe that leveraging the properties of CRDTs is a promising path towards
 highly available and truly concurrent file systems and believe that future
 work should go in this direction.
+
+\section{Discussion}
+
+\textbf{On tests}: ElmerFS have been tests few classic test tools for local file system. Distributed file systems involve way more situation that aren't covered by those tools. Conflict resolutions tests have been done manually, it should be possible to automate and be exhaustive on all sequence of possible operations to ensure that ElmerFS always converge to an expected state.
+
+\textbf{On performances and scaling}: We are conducting scaling and deployment tests of ElmerFS. The file system is lacking a lot a optimization that standard file system implements to provide good throughput. We currently only implement write gathering and we would like to explore the behavior of our distributed file system in larger scale to support enterprise level workloads.
+
+\textbf{On conflict resolution for other operations}: We didn't explore all possible conflict in ElmerFS yet. Permissions in weakly consistent system are challenging~\cite{yanakieva2021access}. Cycle through rename operation are still possible due to our implicit tree representation. We would like to test specialized CRDT that prevent such occurrences while still allowing our current behavior. Recent work on tree CRDT might be a good fit~\cite{nair:hal-03150817}.
+
+\textbf{On content aware file systems}: Our current way of storing file content put user's data at risk in case of conflicting updates. A possible path to explore would be to select specific CRDTs depending on the file extension to allow concurrent file updates. Another path would be to design snapshot-able file to keep multiple versions in case of conflicts.
 
 \bibliographystyle{ACM-Reference-Format}
 \bibliography{elmerpap}
