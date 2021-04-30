@@ -217,14 +217,13 @@ among them presents several challenges:
 	objects with the same name in the same directory.
 	Existing systems resolve naming conflicts between files by automatically renaming
   files, and conflicts between directories either by renaming or by merging them.
-	\item \textbf{Preserving the FS tree invariants}: Concurrent move
-	operations without coordination may violate the file system invariant.
-  For example, merging an operation that moves a directory A into a
+    \item \textbf{Cycles}: Concurrent move operations without coordination may violate the file system invariant.
+    For example, merging an operation that moves a directory A into a
 	directory B with a concurrent operation that moves B into A can result in a cycle.
-  Merging two concurrent operations that move the same directory
-	to different destinations can result in a directory with two parents.
-  \item \textbf{Deletion of inodes}: Concurrent unlink operations
-  that triggers an inode deletion may result in an inode that is still accessible but left in a partial state.
+    Merging two concurrent operations that move the same directory to different destinations can result in a directory with two parents.
+  \item \textbf{Divergent renames}: The \textit{rename} operation is semantically a move operation, it move a link from one folder to another. When two concurrent renames move the same link to two different places, if both rename are ultimately accepted, a additional link of the inode will be created. The file system must ensure that the number of link of a inode is always correctly tracked.
+  \item \textbf{Deletion of inode}: When operations can be concurrent with the deletion of an inode, the file system
+  must ensure that either the deletion is cancelled and the inode restored or that the deletion is kept honored.
   \item \textbf{Permissions changes}: Updating permission from a replica may take some time to be enforced in other replicas.
   Merging an operation that removes a Bob's permission to write to file with a concurrent operation in which Bob writes
   to that file will result in a different outcome depending on the order in which operations are applied.
@@ -232,21 +231,6 @@ among them presents several challenges:
 \end{itemize}
 
 \subsection{Assumptions and objectives}
-
-Ensuring that all replicas converge to the same state without coordination
-is not trivial.
-
-Conflict-Free Replicated Data Types (CRDTs) are data structures that
-can be replicated across multiple replicas,
-and these replicas can be updated independently and concurrently without coordination~\cite{shapiro2011conflict}.
-
-By construction, CRDTs guarantee that modifications on different
-replicas can always be merged into a consistent state without requiring
-any special conflict resolution code or user intervention.
-
-Moreover, the rules used for conflict resolution are parts of each CRDT's definition.
-Therefore, application developers can control their conflict resolution semantics by
-choosing the types of CRTDs they model their application with.
 
 We leverage CRDTs to develop a file system that is always available
 and that provides good response times whatever the network conditions.
@@ -278,6 +262,49 @@ while providing users a simple interface to deal with conflicting updates.
 
 \section{System Overview}
 
+\subsection{Modeling the file system using CRDTs}
+
+Ensuring that all replicas converge to the same state without coordination
+is not trivial.
+
+Conflict-Free Replicated Data Types (CRDTs) are data structures that
+can be replicated across multiple replicas,
+and these replicas can be updated independently and concurrently without coordination~\cite{shapiro2011conflict}.
+
+By construction, CRDTs guarantee that modifications on different
+replicas can always be merged into a consistent state without requiring
+any special conflict resolution code or user intervention.
+
+Moreover, the rules used for conflict resolution are parts of each CRDT's definition.
+Therefore, application developers can control their conflict resolution semantics by
+choosing the types of CRTDs they model their application with.
+
+ElmerFS uses the following CRDT types provided by AntidoteDB~\cite{akkoorath2016antidote}, a CRDT key-value store:
+
+\begin{itemize}
+	\item \textbf{Remove Win Map} (RWMap): A RWMap is a map data type that associate an arbitrary key to a CRDT value, The Remove Win semantic arbitrates conflicting add and remove operations in favor of the remove.
+	\item \textbf{Remove Win Set} (RWSet): A set data structure containing LWWRs. It has add and
+    remove operations. As with the RWMAP, it favors remove operations in conflicting situations.
+	\item \textbf{Last Writer Win Register} (LWWR): A LWWR can be viewed as a blob of data that retains only the last applied update.
+    For concurrent updates, a mechanism based on replica identifiers and timestamps,
+    ensures that the same retained across all replicas.
+\end{itemize}
+
+ElmerFS represents the state of the file system using CRDTs.
+The four main entities are inode objects, symbolic links, blocks and directories.
+An inode structure stores metadata for an inode in the file system. using a Remove Wins Map
+
+We represent a file as a collection of fixed-size blocks. Each block is represented using a LWWR.
+Blocks have a fixed size, they can be addressed with the concatenation of an offset and an ino.
+We do not keep track of the allocated block of a file, we rely on the file size to recover this information.
+
+We represent a symbolic link as a special case of a file, storing exclusively the target path.
+
+We represent a directory using a Remove Win Set (RWSet), a set data type with semantics similar to the RWMap. Directory entries in the set are inode number - name pairs. Directory contains its child directories, a child directory keeps a pointer to its parent through the special ".." named file. Ideally a RWMap whose keys are file names would have been a better choice, however AntidoteDB doesn't support querying specific fields of a map, we had to resort to using a RWSet but we considered two directory entry to be equal if their name are equal as any more practical implementation will want to
+be able to lookup entries with the parent inode number and the name without loading the whole folder in memory.
+
+The design decision of choosing the Remove Win semantic instead of its Add Win counterpart is discussed in Section~\ref{sec:deletion}.
+
 \subsection{The layered architecture of ElmerFS}
 
 An ElmerFS deployment consists of a number of data centers.
@@ -290,26 +317,21 @@ A data center continues serving user requests even if connectivity
 with other data centers is lost due to network partitions.
 
 Within a data center, an ElmerFS cluster consists of an arbitrary number
-of node, and uses a shared-nothing architecture.
-Typically, each node is deployed on a separate physical server.
-Unlike other storage systems in the industry, there is no minimal
-requirement concerning the number of servers in a cluster.
+of node and a shared-nothing architecture.
 
-An ElmerFS node is daemon consisting of the following layers.
+An ElmerFS node is a daemon consisting of the following layers.
 
 \subsubsection{Interface}
 
-The interface layer is responsible for handling interaction between the user
+The interface layer is responsible for handling interaction between the client applications
 and the file system.
 
 It is based on the FUSE protocol, a user-space protocol used to implement
-file systems. The interface layer receives FUSE requests,
-matches them with the corresponding operation in
-the translation layer(\S~\ref{sec:transaction_layer}), and creates the appropriate response.
+file systems. The interface layer receive a FUSE request, calls the corresponding operation in the translation layer(\S~\ref{sec:transaction_layer}), and creates the appropriate response.
 % This layer implements the standard FS operations.
 
-ElmerFS is multi-threaded and asynchronous. Each FUSE request spawns an
-independent task that runs concurrently with other tasks.
+ElmerFS is multi-threaded and asynchronous. Each FUSE request spawns an independent task that runs concurrently with other tasks. The kernel will ensure that on the same inode
+are serialized.
 
 \subsubsection{Translation}
 \label{sec:transaction_layer}
@@ -325,134 +347,129 @@ a single transaction. This ensures that FS operations are atomic.
 The CRDT layer is responsible for replicating CRDTs across data centers
 and providing persistence.
 
-ElmerFS relies on AntidoteDB for implementing this layer.
-AntidoteDB is a key-value store that models data as CRDTs.
-
-ElmerFS represents file system structures as CRDTs.
-It uses the following CRDT types provided by AntidoteDB:
-\begin{itemize}
-	\item \textbf{Remove Win Set} (RWSet): A set data structure with add and
-		  remove operations.
-      In an RWSet, when add operation conflicts with a concurrent remove
-		  operation, the add operation is discarded.
-	\item \textbf{Remove Win Map} (RWMap): A map data structure that
-		  favors remove operations when conflicts arise.
-	\item \textbf{Last Writer Win Register} (LWWR): A blob of data that
-	retains only the last applied update.
-\end{itemize}
-
-\subsection{Modeling the file system using CRDTs}
-
-ElmerFS represents the state of the file system using CRDTs.
-In particular, it models four main entities: inode objects,
-symbolic links, blocks, and directories.
-An inode structure stores metadata for an inode in the file system.
-We represent the inode structure using a Remove Wins Map (RWMap).
-A RWMap is a map data that merges conflicting add and remove operations
-in favor of the remove operations
-
-We represent files as a collections of fixed size blocks.
-Each block is represented using a Last Writer Win Register (LWWR).
-A LWWR can be viewed as a blob of data that retains only the last applied update.
-For concurrent updates, a mechanism, typically based on replica identifiers,
-ensures that the same retained across all replicas.
-
-We represent symbolic links as a special case of files that store only
-the target path.
-
-We represent each directory using a Remove Win Set (RWSet) (a set data structure
-that merges conflicting operations in favor or remove operations).
-Directory entries in the set are inode number - name pairs.
-
-The file system hierarchy is implicit. A parent directory contains its child
-directories and a child directory keeps a pointer to its parent through
-the special ".." named file.
-
-We chose the Remove Win semantics instead of its Add Win counterpart because
-it becomes easier to prevent partial state. We discuss this further
-in section~\ref{sec:deletion}.
+ElmerFS uses AntidoteDB for implementing this layer.
 
 \section{Ensuring correctness}
 
 CRDTs ensure Strong Eventual Consistency (SEC)~\cite{shapiro2011conflict} but
-do not ensure that the application invariants remain correct
+do not ensure that the FS invariants remain correct
 nor that convergence leads to a state that is meaningful
 to the user.
 
-The challenge is to keep those invariant always correct under any sequence
-of operation while ensuring that no data or user intention is lost through
+The challenge is to maintain those invariants correctness under any sequence
+of operations while ensuring that no data or user intention is lost through
 conflict resolution.
 
-In this section,
-we present how we address the challenges discussed in section~\ref{fs:weak}
+In this section, we present how we address the correctness challenges discussed in section~\ref{fs:weak}
 in ElmerFS through the choice of CRDT types for representing file system structures,
 the metadata that ElmerFS maintains, and the transaction of file system operations
 to operations on CRDTs.
 
 \subsection{Generating the inode number}
 \label{sec:generation_inode_number}
-We address this using a global counter. Access to this counter
-is serialized through a distributed lock.
 
-To reduce the overhead of the contention on this lock,
-each access to the global counter reserves a range of inode number which
-can then be consumed locally.
+As introduced in Section~\ref{fs:weak}, file systems cannot leverage
+universally unique id generation algorithm due to the low number of bits
+an inode number is (8 bytes).
 
-Furthermore, ElmerFS, does not recycle the inode number of deleted inodes.
+We are left with two possible choices. Adding synchronisation around a unique
+counter to prevent two replica allocating the same number or to shard the number generation
+with a fixed, known number of shard.
+
+ElmerFS use the first solution, a 8 bytes counter.
+To reduce the overhead of the contention on this lock, each access to the global counter
+reserves fixed range of inode number which can then be consumed locally.
+
+ElmerFS does not recycle the inode number of deleted inodes.
 This is because ensuring that all replicas will converge to a state in which
 an inode number is not used anymore is not compatible with supporting offline
-operation (a replica in which the inode number is still in use can reconnect
-to the system after an arbitrarily long period of time).
+operation, this would require strong consistency, a replica in which the inode number
+is still in use can reconnect to the system after an arbitrarily long period of time.
 It can be noted that, generating 100 000 files per second, it would take around
-8 million years to exhaust this counter.
+8 million years to exhaust this 8 byte counter.
 
 \subsection{Ensuring deletion}
 
 \label{sec:deletion}
-To ensure that delete operations are honored, we chose to use maps and
-sets that honor concurrent removes.
+Following the two possible choice exposed in Section \ref{fs:weak}, ElmerFS always honors
+an inode deletion.
 
 Choosing a remove win semantic for our CRDT ensure that we don't get a partial
-state after a conflict resolution. For map with a fixed set of keys,
-if an add operation is concurrent with a remove operation,
-we won't converge to a CRDT with a state that contains only
-the keys that were updated at that time.
+state (a state where some fields of the inode's metadata remains) after a conflict resolution.
 
-\subsection{Keeping the user intention}
+For example, if an operation updates the inode \textit{ctime} and is concurrent with the deletion of the inode,
+using Add Wins Map would leave the inode with no field but the \textit{ctime} one. With a Remove Wins semantics, because
+we issue the deletion of all the map's keys, the system always converge to an empty map.
 
-In ElmerFS, we allow names conflict to happen and we expect users to solve
-those conflicts using standard FS operations that they are is familiar with.
+The drawback of this approach is that we must know in advance all the keys that might exists map/set to issue a deletion for all the possible keys of this map/set.
 
-To be able to distinguish between two inodes sharing the same name under
-the same parent directory, we use an additional internal unique identifier,
-the ViewID.
+\subsection{Resolving name conflicts}
+
+For availability under partition, ElmerFS allows name conflicts to happen. We expect users to solve
+those conflicts using standard, familiar file system operations.
+
+\subsubsection{A simple conflict scenario}
+To illustrate this, let's consider a scenario in which Alice and Bob collaborate
+on a common project.
+Alice is in a flight without internet access, therefore their replicas are
+partitioned.
+Both Bob and Alice create a directory named \textit{projectA}.
+Because the project will likely need a report,
+they both create a report file \textit{report.doc} and start working on their
+report.
+
+Once connection is re-established, changes are propagated among the two replicas.
+As a result, Bob sees that there are now two directories:
+his own directory \textit{projectA} and a new directory named \textit{projectA:Alice}.
+Alice in turn see her own directory \textit{projectA} and a new directory \textit{projectA:Bob}.
+They can both continue to work on their project without worrying about
+conflict or implicit merges. After some time Bob and Alice agree to merge
+their work by using one of the two folders and removing the other one.
+Finally, they both see a unique file tree \textit{projectA/report.doc}.
+
+Note that this sequence is very close to what a user might expect when working with a local file system. While this example was about folder name conflicts file behaves in the same manner, reducing risks of data loss.
+
+\begin{figure}[h]
+	\caption{Alice and Bob conflict scenario.}
+	\Description{Alice and Bob creates a folder without a connection,
+				 they both see their own folder with the original name
+				 and the one in conflict}
+	\centering
+	\includegraphics[scale=0.5]{AliceBob-font-des-fichiers.pdf}
+\end{figure}
+
+\subsubsection{Name conflict resolution in ElmerFS}
+
+To distinguish between two inodes sharing the same name under the same parent directory, we use an additional internal unique identifier, the ViewID.
 
 Apart from being unique, there is no particular requirement for this identifier.
-We chose to use the file system user id (uid) and we expect that a
-user won’t issue operations from two different processes.
+We chose to use the user id (uid) and we expect that a user won’t issue operations
+from two different processes. Note that it is a simplistic choice, many application might
+log in under the same user on a system, we chose this to be able to map the ViewID to
+sensible name. A more robust system could use an unique id associated with the ElmerFS process and then add metadata
+to map it back to a username for example.
 
 Each time a user creates a link, as illustrated in Figure~\ref{fig:fqn},
-we not only store the name and the ino of the link but also the ViewID of the user that created it.
-Because we use RWSet for directories with an equality put on names,
-entries that would have been previously considered the same
-(sharing the same name and not necessarily the same ino) are now distinct.
+the system stores the name and the ino of the link as well as the ViewID of the user that created it.
+Entries that would have been previously considered the same (sharing the same name) are now distinct.
 
-To interface with the user, we use the concept of partial and
-Fully Qualified Names (FQNs).
-Partial names are how the user named the link,
-FQN are partial names concatenated with the ViewID.
-Since the ViewID is unique, we know that all visible links are uniquely
-identifiable. This means that at anytime the user can chose to refer to its file
-from the partial name of the FQN.
+To interface with the user, we use the concept of partial and Fully Qualified Names (FQNs).
+Partial names are how the user named the link, FQN are partial names concatenated with the ViewID.
 
-In a situation where no conflict exists, we always show partial names.
-When there is a conflict, we only show FQN of entries that have a ViewID that
-does not match the one used by the user.
+At any time, the user can chose to refer to its file from the partial name or the FQN.
 
-Showing only FQN when the ViewIDs mismatch allows the user to continue to
-work by name on the file while other conflicting operations might be merged.
-We always favor the ViewID of the user that issued the request.
+Since the ViewID is unique, we know that all visible links are uniquely identifiable.
+Because we cannot show duplicate names under a folder, when a conflict has occurred we do not display the partial names
+but the FQNs of the conflicting files. Otherwise, the system behaves as a local file system, only showing the original file names.
 
+To prevent applications that do not expect files to be renamed. When there is a conflict, if a request only use a partial name, we always favor the ViewID of the requester. If the application's file is subject to a conflict, the application will
+still be able to refer to its file directly without interruption.
+
+Comparing to have a system that renames files, we always preserve the original name, when conflict happens, the application can still function without worrying of external updates. Intuitively, the user can always see its own file as untouched by the underlying system.
+
+As a drawback, inodes can be queried in two ways at all time, which departs from the POSIX standard. Additionally, it adds the risk
+that two applications thinks to work on the same inode where in fact they are not. This can occurs for applications that unconditionally create a file
+expecting that one of the creation request will fail.
 
 \begin{figure}[h]
 	\caption{An example of the name resolution in ElmerFS. The set above is
@@ -468,106 +485,32 @@ We always favor the ViewID of the user that issued the request.
 
 \subsection{Divergent renames}
 
-Without coordination, \textit{mkdir} and \textit{mknod} are not the only
-operations that can create a link. (See section~\ref{fs:weak} for problematic
-renames).
+As explained in Section~\ref{fs:weak}, without coordination, \textit{rename} can not only create
+cycles but also additional links.
 
-Because of this situation, using a counter to track the number of links is no
-longer sufficient because at the time we issue the \textit{rename} operation
-we cannot know if the operation will end up being concurrent.
+Using a counter to track the number of links is no longer sufficient because at the time we issue
+the \textit{rename} operation we cannot know if the operation will end up being concurrent. We
+risk wrongly count the number of links and deleting an inode prematurely.
 
-To keep track of the number of links, we use another RWSet that is
-always updated alongside the directory entries updates.
+We use another RWSet that is always updated in the same transactions (\S~\ref{sec:transaction_layer}) that create or remove
+a directory entry.
 
-Each link contains the parent inode number and the FQN which contains
-the ViewID.
+Each link contains the parent inode number and the FQN that contains the ViewID.
 We use the ViewID again to have the exact same semantics as the set storing
 the directory entries. Thus the link set is always valid with respect to
 links currently visible in the FS.
 
-However, this solution by itself is not sufficient to ensure that directories have a
-unique parent at all times.
+However, POSIX forbids directory to have multiple links. While we have the correct set of link
+for our inode, we also need to ensure that even after a divergent rename, only one link of the
+directory will stay visible.
 
-This is solved with an additional Last Writer Win register that serves us as
-an arbitrator to decide which link is valid.
+An additional LWWR is used as an arbitrator to decide which link is valid. The LWWR is updated inside
+the \textit{rename}'s transaction (\S~\ref{sec:transaction_layer}) and stores the parent inode number.
 
-Each time we load directories  entries, we check the parent register of each
-entry that points to a directory. If the entry comes from a parent that doesn’t
-match the value of the register, it is garbage collected and never shown to the user.
-Because the register is always updated inside the same transaction, the
-value of the register always matches the update that add the entry
-to the parent.
-
-\subsection{A simple conflict scenario}
-
-Using the design described above we can imagine how ElmerFS behaves in case
-of a conflict.
-
-To illustrate this, let's consider again Bob and Alice. Alice and Bob work
-on the same project but cannot communicate. They do not want to wait and start by creating a folder named \textit{projectA}. Because the project will likely needs a report,
-they both create a report file \textit{report.doc} to type in their early work.
-
-Once the connection reestablished, Bob see that there is now two folders:
-his own folder \textit{projectA} and another one \textit{projectA:Alice}.
-
-They can both continue to work on their project without worrying about
-conflict or implicit merges. After some time Bob and Alice agree to merge
-their work. Alice remove its old no longer relevant folder.
-
-They both see a unique file tree \textit{projectA/report.doc}.
-
-Note that this sequence is very close to what a user might expect when working with a local file system. While this example was about folder name conflicts file behaves in the same manner, reducing risks of data loss.
-
-\begin{figure}[h]
-	\caption{Alice and Bob conflict scenario.}
-	\Description{Alice and Bob creates a folder without a connection,
-				 they both see their own folder with the original name
-				 and the one in conflict}
-	\centering
-	\includegraphics[scale=0.5]{AliceBob-font-des-fichiers.pdf}
-\end{figure}
-
-\section{Direction for future research}
-\label{crdt:future}
-
-\subsection{Concurrent ino number generation and recycling}
-
-Our solution to generate an inode number described in section~\ref{sec:generation_inode_number}
-is not truly concurrent.
-To address this, and to be able to recycle inode numbers,
-a specialized CRDT type might be needed.
-A possible solution for specifying such a CRDT type would be to draw inspiration
-from sequence CRDT used for text processing application where each inserted
-character is assigned an unique position \cite{nedelec2013lseq, letia2009crdts}.
-
-\subsection{Cycle with concurrent rename}
-
-Our implicit hierarchy using map CRDTs does not prevent the creation of cycles.
-Some CRDT tree design exists~\cite{martin2012abstract} but relies on multiple correction
-layers that perform additional operations to recover from the broken invariants.
-We believe that both this issue could be solved by the use of a conditional transaction framework.
-The key idea would be to merge operations only if they satisfy a specified condition.
-
-For cycles, this would simply be that the resulting tree does not have a cycle.
-Transactions that do not satisfy this condition should be discarded
-in a deterministic manner to ensure convergence.
-
-\subsection{Dealing with Orphan CRDTs}
-
-Our deletion strategy relies solely on issuing a delete operation for all
-known CRDTs of an entity.
-
-For file content, where we store an implicit and unbounded number of CRDT,
-concurrent add operations merges can lead to content lingering
-without an entity to reference it.
-
-Tombstones are sometimes used in CRDT design, but here we need a mechanism
-to link and propagate deletion across multiple CRDT.
-
-We are not aware of any protocol that allows this.
-A possible framework could rely on a unique tombstone and use conditional
-transactions described in the previous section to discard concurrent
-add operations.
+When ElmerFS loads a directory entry, it first check that the LWWR stored parent correspond to
+the directory being looked up. If they do not correspond, the entry is removed and the file system
+correctly inform the user that the entry does not exists. The drawback is that we may never reclaim
+the entry with the wrong parent if the parent is never looked up.
 
 \section{Conclusion}
 
@@ -592,13 +535,59 @@ work should go in this direction.
 
 \section{Discussion}
 
-\textbf{On tests}: ElmerFS have been tests few classic test tools for local file system. Distributed file systems involve way more situation that aren't covered by those tools. Conflict resolutions tests have been done manually, it should be possible to automate and be exhaustive on all sequence of possible operations to ensure that ElmerFS always converge to an expected state.
+In this section, we introduce directions for further research and open questions that
+we would welcome feedback on:
 
-\textbf{On performances and scaling}: We are conducting scaling and deployment tests of ElmerFS. The file system is lacking a lot a optimization that standard file system implements to provide good throughput. We currently only implement write gathering and we would like to explore the behavior of our distributed file system in larger scale to support enterprise level workloads.
+\begin{itemize}
+    \item \textbf{Concurrent ino number generation and recycling.}
+    Our solution to generating a inode numbers, described in section~\ref{sec:generation_inode_number},
+    is not truly concurrent.
+    A possible solution for addressing this could be a specialized CRDT type.
+    The specification of such a CRDT could draw inspiration from the sequence CRDTs
+    used for text processing application where each inserted
+    character is assigned a unique position \cite{nedelec2013lseq, letia2009crdts}.
 
-\textbf{On conflict resolution for other operations}: We didn't explore all possible conflict in ElmerFS yet. Permissions in weakly consistent system are challenging~\cite{yanakieva2021access}. Cycle through rename operation are still possible due to our implicit tree representation. We would like to test specialized CRDT that prevent such occurrences while still allowing our current behavior. Recent work on tree CRDT might be a good fit~\cite{nair:hal-03150817}.
+    \item \textbf{Cycles with concurrent renames}
+    Our implicit hierarchy using map CRDTs does not prevent the creation of cycles.
+    CRDT tree designs have been proposed~\cite{martin2012abstract}\cite{ahmed2012file}, but rely on multiple correction
+    layers that perform additional operations to recover from broken invariants.
+    We believe that both these issues could be solved by the use of post-conditions on merging
+    concurrent updates.
+    The key idea would be to merge operations only if the resulting state satisfies a given condition.
+    For cycles, this would condition would be be that the resulting tree does not have a cycle~\cite{nair:hal-03150817}.
+    Transactions that do not satisfy this condition would be discarded in a deterministic manner to ensure convergence.
 
-\textbf{On content aware file systems}: Our current way of storing file content put user's data at risk in case of conflicting updates. A possible path to explore would be to select specific CRDTs depending on the file extension to allow concurrent file updates. Another path would be to design snapshot-able file to keep multiple versions in case of conflicts.
+    \item \textbf{Dealing with Orphan CRDTs}
+    Our deletion strategy relies solely on issuing a delete operation for all
+    known CRDTs of an entity.
+
+    For file content, where we store an implicit and unbounded number of CRDTs,
+    concurrent add operations conflict resolution can lead to content lingering
+    without an entity to reference it.
+
+    Tombstones are sometimes used in CRDT design, but here we need a mechanism to link and propagate
+    deletion across multiple CRDT.
+
+    We are not aware of any protocol that allows this. A possible framework could rely on a unique tombstone and use conditional
+    transactions described in the previous section to discard concurrent add operations.
+
+    \item \textbf{On performance and scaling}: We are conducting performance and scaling evaluation of ElmerFS.
+    Our initial results show that ElmerFS lacks optimizations that more mature file system implement to achieve high throughput.
+    We currently only implement write gathering and we would like to explore the behavior of our distributed file system in larger scale to support enterprise level workloads.
+
+    \item \textbf{On conflict resolution for other operations}: We have not explored all possible conflict in ElmerFS yet.
+    Permissions in weakly consistent systems are challenging~\cite{yanakieva2021access}.
+    Cycles through rename operation are still possible due to our implicit tree representation.
+    We would like to test specialized CRDT that prevent such occurrences while still allowing our current behavior. Recent work on tree CRDT might be a good fit~\cite{nair:hal-03150817}.
+
+    \item \textbf{On content aware file systems}: The way ElmerFS currently stores file content puts user data at risk in case of conflicting updates. A possible path to explore would be to select specific CRDTs depending on the file extension to allow concurrent file updates. Another path would be to design snapshot-able file to keep multiple versions in case of conflicts.
+\end{itemize}
+
+
+% // Commenting this because there is a paper about that (the one Marc sent us)
+% // Design and Implementation of a Concurrency Benchmark Tool for Cloud Storage Systems
+% \textbf{On tests}: We have tested ElmerFS with some classic test tools designed for local file system. Distributed file systems involve additional considerations for testing, not covered by those tools. We have performed ad-hoc conflict resolution tests, however we believe that it should be possible to automate this process with a tool that exhaustively tests all pairs of possible operations to ensure that the file system always converge to an expected state.
+
 
 \bibliographystyle{ACM-Reference-Format}
 \bibliography{elmerpap}
