@@ -21,7 +21,7 @@
 %\acmISBN{123-4567-24-567/08/06}
 
 %Conference
-\acmConference[SYSTOR'21]{ACM International Systems and Storage Conference}{June 14-16, 2021}{Haifa, Israel}
+\acmConference[HotStorage'21]{ACM International Systems and Storage Conference}{July 2021}{Virtual}
 \acmYear{2021}
 \copyrightyear{2021}
 
@@ -48,7 +48,7 @@
 
 \author{Dimitrios Vasilas}
 \affiliation{%
-  \institution{Lip6}
+  \institution{Sorbonne Universite - LIP6, Scality}
   \city{Paris}
   \country{France}
 }
@@ -56,7 +56,7 @@
 
 \author{Marc Shapiro}
 \affiliation{%
-	\institution{Inria \& Lip6}
+	\institution{Sorbonne Universite - LIP6, Inria}
 	\city{Paris}
 	\country{France}
 }
@@ -88,7 +88,7 @@ on two key ideas: (1) the use of Conflict-Free Replicated
 Data Types (CRDTs) for representing file system structures,
 which ensures that replicas converge to a correct state, and
 (2) conflict resolution rules, which are determined by the
-choice of CRDT types and their composition, are designed
+choice of CRDT types and their composition, designed
 with the principle of being intuitive to the user. We argue
 that if the state of the file system after resolving a conflict
 conveys to the user the resolved conflict in an intuitive way,
@@ -190,19 +190,10 @@ a geo-replicated file system that provides intuitive conflict resolution
 semantics, while maintaining support for legacy applications.
 The design of ElmerFS leverages the properties of Conflict-Free Replicated Data Types (CRDTs) to ensure that concurrent operations on different replicas always converge to a correct state while preserving the semantics of a traditional POSIX file system.
 The guiding principle for designing conflict resolution in ElmerFS is that
-it should be intuitive to the user and minimally disruptive for applications.
+it should be intuitive to the user while maintaining compatibility with applications developed with existing file system interfaces in mind.
 This is achieved by designing conflict resolution rules that
 (1) preserve the effects of conflicting operations as much as possible,
 and (2) do not introduce changes not explicitly expressed by the conflicting operations.
-
-\section{Related Work}
-
-Designing a geos-distributed file system using CRDTs is not a novel idea, "Merging semantics for conflict updates in geo-distributed file systems"\cite{tao2015merging} categorizes various conflicts in a weakly-consistent file system and describes how it could be designed as one CRDT that solve conflicts in a precise manner.
-However, while it provides a good description on how such system could be designed, it misses a practical approach to the problem. When using existing, formally proven CRDTs, keeping the application invariant is often not straight-forward.
-
-Closely related to our work, "File System on CRDT"\cite{ahmed2012file} is a description of simplified file system based on CRDTs which solve conflicts with multiple correction layers and by building a view of the underlying system. Their solutions use renaming for name conflict and after-the-fact automatic conflict resolutions, a design from which we want to depart to support legacy application and to help users to build a simple mental model of the underlying system.
-
-
 
 \section{Designing a file system}
 
@@ -267,6 +258,13 @@ Our focus therefore is to leverage CRDTs to create a highly resilient and
 truly concurrent file system that follows the strict POSIX invariants
 while providing users a simple interface to deal with conflicting updates.
 
+\section{Related Work}
+
+Designing a geos-distributed file system using CRDTs is not a novel idea, "Merging semantics for conflict updates in geo-distributed file systems"\cite{tao2015merging} categorizes various conflicts in a weakly-consistent file system and describes how it could be designed as one CRDT that solve conflicts in a precise manner.
+However, while it provides a good description on how such system could be designed, it misses a practical approach to the problem. When using existing, formally proven CRDTs, keeping the application invariant is often not straight-forward.
+
+Closely related to our work, "File System on CRDT"\cite{ahmed2012file} is a description of simplified file system based on CRDTs which solve conflicts with multiple correction layers and by building a view of the underlying system. Their solutions use renaming for name conflict and after-the-fact automatic conflict resolutions, a design from which we want to depart to support legacy application and to help users to build a simple mental model of the underlying system.
+
 \section{System Overview}
 
 \subsection{Modeling the file system using CRDTs}
@@ -276,7 +274,7 @@ is not trivial.
 
 Conflict-Free Replicated Data Types (CRDTs) are data structures that
 can be replicated across multiple replicas,
-and these replicas can be updated independently and concurrently without coordination~\cite{shapiro2011conflict}.fo
+and these replicas can be updated independently and concurrently without coordination~\cite{shapiro2011conflict}.
 
 By construction, CRDTs guarantee that modifications on different
 replicas can always be merged into a consistent state without requiring
@@ -358,12 +356,10 @@ ElmerFS uses AntidoteDB\cite{akkoorath2016cure, akkoorath2016antidote} for imple
 
 \section{Ensuring correctness}
 
-CRDTs ensure  but do not ensure that the FS invariants remain correct
-nor that convergence leads to a state that is meaningful to the user.
+CRDTs ensure Strong Eventual Consistency (SEC)~\cite{shapiro2011conflict}: two nodes that receive the same set of unordered updates converges to the 
+same state. However, they do not ensure that the FS invariants remain correct nor that convergence leads to a state that is meaningful to the user.
 
-The challenge is to maintain those invariants correctness under any sequence
-of operations while ensuring that no data or user intention is lost through
-conflict resolution.
+The challenge is to maintain those invariants correctness under any sequence of operations while ensuring that no data or user intention is lost through conflict resolution.
 
 In this section, we present how we address the correctness challenges discussed in section~\ref{fs:weak}
 in ElmerFS through the choice of CRDT types for representing file system structures,
@@ -385,10 +381,8 @@ ElmerFS use the first solution, a 8 bytes counter.
 To reduce the overhead of the contention on this lock, each access to the global counter reserves fixed range of inode number which can then be consumed locally.
 
 ElmerFS does not, however, recycle the inode number of deleted inodes.
-This is because ensuring that all replicas will converge to a state in which
-an inode number is not used anymore is not compatible with supporting offline
-operation, this would require strong consistency, a replica in which the inode number
-is still in use can reconnect to the system after an arbitrarily long period of time.
+This is because ensuring that all replicas will converge to a state in which an inode number is not used anymore is not compatible with supporting offline operation. This would require strong consistency.
+% a replica in which the inode number is still in use can reconnect to the system after an arbitrarily long period of time.
 
 \subsection{Ensuring deletion}
 
@@ -425,9 +419,9 @@ Alice in turn see her own file \textit{report.doc} and Bob's one \textit{report.
 They can both continue to work on their project without worrying about
 conflict or implicit merges. Applications that previously successfully created their temporary files continue to work as the system always favor the local view. From both applications point of view, their file is named \textit{report.doc.tmp}.
 
-A third user, Kreg, could appear at any moment, he would see both files with their full name: \textit{report.doc:Bob} and \textit{report.doc:Alice}.
+A third user, Kreg, he would see both files with their full name: \textit{report.doc:Bob} and \textit{report.doc:Alice}.
 
-Note that this sequence is very close to what a user might expect when working with a local file system. Application did not have to be modified to support the underlying weakly consistent system nor they needed to know the precise semantic of the file system if a simple renaming scheme have had been used.
+Note that this sequence is very close to what a user might expect when working with a local file system. Application did not have to be modified to support the underlying weakly consistent system nor they needed to know the precise semantic of the geo-distributed file system if a simple renaming scheme have had been used.
 
 \begin{figure}[h]
 	\caption{Alice and Bob conflict scenario.}
@@ -539,12 +533,19 @@ In this section, we introduce directions for further research and open questions
 we would welcome feedback on:
 
 \begin{itemize}
+    % \item \textbf{Concurrent ino number generation and recycling.}
+    % Our solution to generating a inode numbers, described in section~\ref{sec:generation_inode_number},
+    % is not truly concurrent.
+    % A possible solution for addressing this could be a specialized CRDT type.
+    % The specification of such a CRDT could draw inspiration from the sequence CRDTs
+    % used for text processing application where each inserted
+    % character is assigned a unique position \cite{nedelec2013lseq, letia2009crdts}.
+
     \item \textbf{Cycles with concurrent renames}
     Our implicit hierarchy using map CRDTs does not prevent the creation of cycles.
     CRDT tree designs have been proposed~\cite{martin2012abstract}\cite{ahmed2012file}, but rely on multiple correction
     layers that perform additional operations to recover from broken invariants.
-    We believe that both these issues could be solved by the use of post-conditions on merging
-    concurrent updates.
+    We believe that both these issues could be solved by the use of post-conditions on merging concurrent updates.
     The key idea would be to merge operations only if the resulting state satisfies a given condition.
     For cycles, this would condition would be be that the resulting tree does not have a cycle~\cite{nair:hal-03150817}.
     Transactions that do not satisfy this condition would be discarded in a deterministic manner to ensure convergence.
